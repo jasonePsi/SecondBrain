@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "Second Brain Mobile",
+    "slug": "second_brain_mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.secondbrain.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.secondbrain.mobile",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      [
+        "llama.rn",
+        {
+          "enableEntitlements": true,
+          "forceCxx20": true,
+          "enableOpenCL": true
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Second Brain to access your microphone for dictation.",
+          "speechRecognitionPermission": "Allow Second Brain to recognize your speech."
+        }
+      ]
+    ],
+    "scheme": "secondbrain"
+  }
+}
