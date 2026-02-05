@@ -32,6 +32,6 @@ export const FeedRepo = {
         params.push(limit);
 
         const res = await db.execute(sql, params);
-        return res.rows?._array || [];
+        return (res.rows as FeedItem[]) || [];
     }
 };

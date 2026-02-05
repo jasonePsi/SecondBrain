@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { FeedRepo, FeedItem } from '../../src/repositories/feed_repo';
 import { Colors } from '../../src/constants/Colors';
@@ -8,6 +9,8 @@ import { CaptureFAB } from '../../src/components/CaptureFAB';
 
 export default function FeedScreen() {
     const [items, setItems] = useState<FeedItem[]>([]);
+
+    const router = useRouter();
 
     useEffect(() => {
         // Run migrations once on mount (hacky but works for MVP local dev)
@@ -39,7 +42,7 @@ export default function FeedScreen() {
                 estimatedItemSize={50}
                 ListEmptyComponent={<Text style={styles.empty}>No feed items yet. Capture something!</Text>}
             />
-            <CaptureFAB onPress={() => console.log('Capture Tapped')} />
+            <CaptureFAB onPress={() => router.push('/space/new')} />
         </View>
     );
 }

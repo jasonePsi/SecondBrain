@@ -1,19 +1,32 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Button } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, NativeModules } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Message, MessageRepo } from '../../src/repositories/message_repo';
 import { ThreadRepo } from '../../src/repositories/thread_repo';
 import { Colors } from '../../src/constants/Colors';
 import { Ionicons } from '@expo/vector-icons';
 import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 
+// Get device language
+const deviceLocale = Platform.OS === 'ios'
+    ? NativeModules.SettingsManager?.settings?.AppleLocale ||
+    NativeModules.SettingsManager?.settings?.AppleLanguages?.[0] || 'el-GR'
+    : 'el-GR';
+
+// Determine if device is Greek or not
+const isGreekDevice = deviceLocale.startsWith('el');
+
 export default function ThreadScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
+    const router = useRouter();
     const [messages, setMessages] = useState<Message[]>([]);
     const [inputText, setInputText] = useState('');
     const [threadTitle, setThreadTitle] = useState('Chat');
     const [isRecording, setIsRecording] = useState(false);
+    const [transcriptBuffer, setTranscriptBuffer] = useState('');
+    const [speechLang, setSpeechLang] = useState<'el-GR' | 'en-US'>(isGreekDevice ? 'el-GR' : 'en-US'); // Default to device language
 
     useEffect(() => {
         const init = async () => {
@@ -26,10 +39,32 @@ export default function ThreadScreen() {
         init();
     }, [id]);
 
-    useSpeechRecognitionEvent('onSpeechResults', (event) => {
-        const result = event.results[0];
-        if (result) {
-            setInputText(result.transcript);
+    // Update input when transcript changes
+    useEffect(() => {
+        if (transcriptBuffer) {
+            setInputText(transcriptBuffer);
+        }
+    }, [transcriptBuffer]);
+
+    // Handle speech results - try multiple event names for robustness
+    useSpeechRecognitionEvent('result', (event) => {
+        if (event.results && event.results.length > 0) {
+            const result = event.results[event.results.length - 1];
+            if (result && result[0]) {
+                setTranscriptBuffer(result[0].transcript);
+            }
+        }
+    });
+
+    useSpeechRecognitionEvent('speechstart', () => setIsRecording(true));
+    useSpeechRecognitionEvent('speechend', () => setIsRecording(false));
+
+    // Handle speech errors
+    useSpeechRecognitionEvent('error', (event) => {
+        console.error('Speech error:', event);
+        setIsRecording(false);
+        if (event.error === 'not-allowed') {
+            Alert.alert('Permission Required', 'Please allow microphone access in Settings.');
         }
     });
 
@@ -43,34 +78,48 @@ export default function ThreadScreen() {
         if (!id || !inputText.trim()) return;
         await MessageRepo.create(id, 'user', inputText.trim());
         setInputText('');
+        setTranscriptBuffer('');
         await loadMessages();
     };
 
-    const startRecording = async () => {
-        try {
-            const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-            if (!result.granted) {
-                alert('Microphone permission denied');
-                return;
-            }
-            setIsRecording(true);
-            ExpoSpeechRecognitionModule.start({
-                lang: 'en-US',
-                interimResults: true,
-                maxAlternatives: 1,
-            });
-        } catch (e) {
-            console.error(e);
-        }
-    };
+    const toggleLanguage = useCallback(() => {
+        setSpeechLang(prev => prev === 'el-GR' ? 'en-US' : 'el-GR');
+    }, []);
 
-    const stopRecording = () => {
-        setIsRecording(false);
-        ExpoSpeechRecognitionModule.stop();
-        if (inputText.trim()) {
-            sendMessage();
+    const toggleRecording = useCallback(async () => {
+        if (isRecording) {
+            try {
+                await ExpoSpeechRecognitionModule.stop();
+            } catch (e) {
+                console.error('Stop error:', e);
+            }
+            setIsRecording(false);
+        } else {
+            try {
+                const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+                if (!result.granted) {
+                    Alert.alert('Permission Required', 'Please allow microphone and speech recognition access.');
+                    return;
+                }
+                setTranscriptBuffer('');
+                setIsRecording(true);
+
+                // Use selected language, allow server recognition for better mixed language support
+                await ExpoSpeechRecognitionModule.start({
+                    lang: speechLang,
+                    interimResults: true,
+                    maxAlternatives: 1,
+                    continuous: true,
+                    requiresOnDeviceRecognition: false, // Allow server-based for better accuracy
+                    addsPunctuation: true, // Auto-punctuate
+                });
+            } catch (e) {
+                console.error('Start error:', e);
+                setIsRecording(false);
+                Alert.alert('Error', 'Could not start speech recognition. Please try again.');
+            }
         }
-    };
+    }, [isRecording, speechLang]);
 
     const renderItem = ({ item }: { item: Message }) => {
         const isUser = item.role === 'user';
@@ -84,45 +133,118 @@ export default function ThreadScreen() {
         );
     };
 
+    const handleRename = () => {
+        Alert.prompt(
+            "Rename Thread",
+            "Enter a new name for this thread:",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Save",
+                    onPress: async (newName?: string) => {
+                        if (newName && newName.trim() && id) {
+                            await ThreadRepo.update(id, { title: newName.trim() });
+                            setThreadTitle(newName.trim());
+                        }
+                    }
+                }
+            ],
+            "plain-text",
+            threadTitle
+        );
+    };
+
+    const handleDelete = () => {
+        Alert.alert(
+            "Delete Thread",
+            "Are you sure you want to delete this thread? This cannot be undone.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        if (id) {
+                            await ThreadRepo.delete(id);
+                            router.back(); // Go back to space
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleSettings = () => {
+        Alert.alert(
+            "Thread Options",
+            "Choose an action",
+            [
+                { text: "Rename", onPress: handleRename },
+                { text: "Delete", onPress: handleDelete, style: "destructive" },
+                { text: "Cancel", style: "cancel" }
+            ]
+        );
+    };
+
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
-        >
-            <Stack.Screen options={{ title: threadTitle }} />
-            <View style={styles.listContainer}>
-                <FlashList
-                    data={messages}
-                    renderItem={renderItem}
-                    estimatedItemSize={80}
-                    inverted
-                    contentContainerStyle={{ padding: 16 }}
+        <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+            <KeyboardAvoidingView
+                style={styles.keyboardContainer}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+            >
+                <Stack.Screen
+                    options={{
+                        title: threadTitle,
+                        headerRight: () => (
+                            <TouchableOpacity onPress={handleSettings} style={{ marginRight: 10 }}>
+                                <Ionicons name="ellipsis-horizontal-circle" size={28} color={Colors.primary} />
+                            </TouchableOpacity>
+                        )
+                    }}
                 />
-            </View>
-            <View style={styles.inputContainer}>
-                <TextInput
-                    style={styles.input}
-                    value={inputText}
-                    onChangeText={setInputText}
-                    placeholder="Type a message..."
-                    multiline
-                />
-                {inputText.length > 0 ? (
-                    <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
-                        <Ionicons name="send" size={24} color={Colors.primary} />
-                    </TouchableOpacity>
-                ) : (
+                <View style={styles.listContainer}>
+                    <FlashList
+                        data={messages}
+                        renderItem={renderItem}
+                        estimatedItemSize={80}
+                        inverted
+                        contentContainerStyle={{ padding: 16 }}
+                    />
+                </View>
+                <View style={styles.inputContainer}>
+                    <TextInput
+                        style={styles.input}
+                        value={inputText}
+                        onChangeText={setInputText}
+                        placeholder={isRecording ? `Listening (${speechLang === 'el-GR' ? 'ΕΛ' : 'EN'})... Tap mic to stop` : "Type or tap mic to speak..."}
+                        placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
+                        multiline
+                    />
                     <TouchableOpacity
-                        onPressIn={startRecording}
-                        onPressOut={stopRecording}
+                        onPress={toggleLanguage}
+                        style={styles.langButton}
+                    >
+                        <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={toggleRecording}
                         style={[styles.micButton, isRecording && styles.micActive]}
                     >
-                        <Ionicons name={isRecording ? "mic" : "mic-outline"} size={24} color={isRecording ? "white" : Colors.primary} />
+                        <Ionicons
+                            name={isRecording ? "stop" : "mic"}
+                            size={28}
+                            color={isRecording ? "white" : Colors.primary}
+                        />
                     </TouchableOpacity>
-                )}
-            </View>
-        </KeyboardAvoidingView>
+                    {inputText.length > 0 && (
+                        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
+                            <Ionicons name="send" size={28} color={Colors.primary} />
+                        </TouchableOpacity>
+                    )}
+                </View>
+            </KeyboardAvoidingView>
+        </SafeAreaView>
     );
 }
 
@@ -131,36 +253,57 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: Colors.background,
     },
+    keyboardContainer: {
+        flex: 1,
+    },
     listContainer: {
         flex: 1
     },
     inputContainer: {
         flexDirection: 'row',
-        padding: 10,
+        padding: 12,
+        paddingBottom: 10,
         backgroundColor: Colors.card,
         borderTopWidth: 1,
         borderTopColor: Colors.border,
-        alignItems: 'center'
+        alignItems: 'flex-end'
     },
     input: {
         flex: 1,
         backgroundColor: Colors.background,
-        borderRadius: 20,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        maxHeight: 100,
-        marginRight: 10
+        borderRadius: 24,
+        paddingHorizontal: 20,
+        paddingVertical: 14,
+        fontSize: 17,
+        minHeight: 52,
+        maxHeight: 150,
+        marginRight: 10,
+        color: Colors.text,
     },
     sendButton: {
-        padding: 5
+        padding: 10,
+        marginLeft: 4,
+    },
+    langButton: {
+        padding: 8,
+        marginRight: 6,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    langText: {
+        fontSize: 24,
     },
     micButton: {
-        padding: 8,
-        borderRadius: 20,
-        backgroundColor: Colors.background // or transparent
+        padding: 12,
+        borderRadius: 26,
+        backgroundColor: Colors.background,
+        width: 52,
+        height: 52,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     micActive: {
-        backgroundColor: Colors.notification
+        backgroundColor: Colors.notification,
     },
     bubbleWrapper: {
         width: '100%',
@@ -189,10 +332,12 @@ const styles = StyleSheet.create({
         borderColor: Colors.border
     },
     userText: {
-        color: '#fff'
+        color: '#fff',
+        fontSize: 16,
     },
     assistantText: {
-        color: '#000'
+        color: '#000',
+        fontSize: 16,
     },
     bubbleMeta: {
         fontSize: 10,
@@ -201,3 +346,4 @@ const styles = StyleSheet.create({
         textAlign: 'right'
     }
 });
+

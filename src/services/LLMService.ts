@@ -14,14 +14,24 @@ const JSON_GRAMMAR =
     "ws ::= ([ \\t\\n]*)\\n";
 
 export const LLMService = {
-    init: async (modelName: string) => {
+    init: async () => {
         if (context) return context;
 
-        if (!(await ModelManager.exists(modelName))) {
-            throw new Error('Model not found');
+        // Get active model from database
+        const activeModel = await ModelManager.getActiveModel();
+        if (!activeModel) {
+            throw new Error('No model installed. Please download a model in Settings.');
         }
 
-        const path = ModelManager.getPath(modelName);
+        // Verify model file exists
+        const isInstalled = await ModelManager.isInstalled(activeModel.model_id);
+        if (!isInstalled) {
+            throw new Error('Active model file not found. Please re-download in Settings.');
+        }
+
+        const path = activeModel.path;
+        console.log(`Initializing LLM with model: ${activeModel.model_id} at ${path}`);
+
         context = await initLlama({
             model: path,
             use_mlock: true,

@@ -1,7 +1,7 @@
 import { db } from './client';
 import { generateId } from '../utils/id'; // Need to create this
 
-const TABLES_SQL = \`
+const TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS spaces (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
@@ -66,29 +66,29 @@ const TABLES_SQL = \`
   CREATE INDEX IF NOT EXISTS idx_facts_lookup ON facts(scope_type, scope_id, key, effective_at DESC);
   CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status, type);
   CREATE INDEX IF NOT EXISTS idx_feed_space ON feed_items(space_id, created_at DESC);
-\`;
+`;
 
 export async function runMigrations() {
   // Create migrations table
   await db.execute('CREATE TABLE IF NOT EXISTS migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, ran_at INTEGER NOT NULL)');
 
   const result = await db.execute('SELECT MAX(version) as version FROM migrations');
-  const currentVersion = result.rows?._array?.[0]?.version || 0;
+  const currentVersion = (result.rows as any[])?.[0]?.version || 0;
 
   console.log('Current DB Version:', currentVersion);
 
   if (currentVersion < 1) {
     console.log('Running Migration 1: Schema...');
     await db.transaction(async (tx) => {
-        // Simple splitting by semicolon (naive but works for this SQL)
-        const statements = TABLES_SQL.split(';')
-            .map(s => s.trim())
-            .filter(s => s.length > 0);
-        
-        for (const statement of statements) {
-            await tx.execute(statement);
-        }
-        await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [1, Date.now()]);
+      // Simple splitting by semicolon (naive but works for this SQL)
+      const statements = TABLES_SQL.split(';')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+      for (const statement of statements) {
+        await tx.execute(statement);
+      }
+      await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [1, Date.now()]);
     });
   }
 
@@ -99,14 +99,31 @@ export async function runMigrations() {
     // For now, let's just use hardcoded IDs or simple logic.
     const spaces = ['Personal', 'Work', 'Gym', 'Recipes'];
     const now = Date.now();
-    
+
     await db.transaction(async (tx) => {
-        for (const name of spaces) {
-             // Generate a simple ID
-             const id = Math.random().toString(36).substring(2, 15); 
-             await tx.execute('INSERT INTO spaces (id, name, created_at) VALUES (?, ?, ?)', [id, name, now]);
-        }
-        await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [2, Date.now()]);
+      for (const name of spaces) {
+        // Generate a simple ID
+        const id = Math.random().toString(36).substring(2, 15);
+        await tx.execute('INSERT INTO spaces (id, name, created_at) VALUES (?, ?, ?)', [id, name, now]);
+      }
+      await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [2, Date.now()]);
+    });
+  }
+
+  if (currentVersion < 3) {
+    console.log('Running Migration 3: Model Settings...');
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        CREATE TABLE IF NOT EXISTS model_settings (
+          id TEXT PRIMARY KEY NOT NULL,
+          model_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          installed_at INTEGER NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+      await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [3, Date.now()]);
     });
   }
 }

@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
 import { SpaceRepo } from '../../src/repositories/space_repo';
 import { Colors } from '../../src/constants/Colors';
-import { useFocusEffect } from '@expo/router';
+import { useFocusEffect } from 'expo-router';
 
 export default function SpaceDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -33,15 +33,15 @@ export default function SpaceDetailScreen() {
 
   const createThread = async () => {
     if (!id) return;
-    const newId = await ThreadRepo.create(id, \`New Thread \${new Date().toLocaleTimeString()}\`);
-      await loadData();
-      router.push(\`/thread/\${newId}\`);
+    const newId = await ThreadRepo.create(id, `New Thread ${new Date().toLocaleTimeString()}`);
+    await loadData();
+    router.push(`/thread/${newId}`);
   };
 
   const renderItem = ({ item }: { item: Thread }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
       style={styles.item}
-      onPress={() => router.push(\`/thread/\${item.id}\`)}
+      onPress={() => router.push(`/thread/${item.id}`)}
     >
       <Text style={styles.itemTitle}>{item.title}</Text>
       <Text style={styles.itemDate}>{new Date(item.created_at).toLocaleString()}</Text>
@@ -73,17 +73,17 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   itemTitle: {
-      fontSize: 16,
-      fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '600',
   },
   itemDate: {
-      color: Colors.secondaryText,
-      fontSize: 12,
-      marginTop: 4
+    color: Colors.secondaryText,
+    fontSize: 12,
+    marginTop: 4
   },
   empty: {
-      textAlign: 'center',
-      marginTop: 20,
-      color: Colors.secondaryText
+    textAlign: 'center',
+    marginTop: 20,
+    color: Colors.secondaryText
   }
 });

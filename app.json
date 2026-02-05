@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Second Brain Mobile",
+    "name": "Second Brain",
     "slug": "second_brain_mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -14,7 +14,12 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.secondbrain.mobile"
+      "bundleIdentifier": "com.secondbrain.mobile",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow Second Brain to recognize your speech.",
+        "NSMicrophoneUsageDescription": "Allow Second Brain to access your microphone for dictation.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -42,7 +47,7 @@
       [
         "llama.rn",
         {
-          "enableEntitlements": true,
+          "enableEntitlements": false,
           "forceCxx20": true,
           "enableOpenCL": true
         }
@@ -55,6 +60,12 @@
         }
       ]
     ],
-    "scheme": "secondbrain"
+    "scheme": "secondbrain",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8a8e35e4-7296-4b51-ba85-b9289783aa19"
+      }
+    }
   }
 }

@@ -29,7 +29,7 @@ export const FactRepo = {
     sql += ' ORDER BY effective_at DESC LIMIT 1';
 
     const res = await db.execute(sql, params);
-    return res.rows?._array?.[0] || null;
+    return (res.rows as Fact[])?.[0] || null;
   },
 
   upsert: async (
@@ -43,25 +43,25 @@ export const FactRepo = {
     effectiveAt?: number
   ) => {
     const id = generateId();
-    await db.execute(\`INSERT INTO facts (
+    await db.execute(`INSERT INTO facts (
         id, scope_type, scope_id, entity_id, key, value_json, unit, effective_at, source_message_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`, [
-        id, scopeType, scopeId || null, entityId || null, key, JSON.stringify(value), unit || null, effectiveAt || Date.now(), sourceMessageId || null, Date.now()
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      id, scopeType, scopeId || null, entityId || null, key, JSON.stringify(value), unit || null, effectiveAt || Date.now(), sourceMessageId || null, Date.now()
     ]);
     return id;
   },
-  
+
   list: async (scopeType: 'thread' | 'space' | 'global', scopeId: string | null): Promise<Fact[]> => {
     let sql = 'SELECT * FROM facts WHERE scope_type = ?';
     const params = [scopeType];
     if (scopeId) {
-        sql += ' AND scope_id = ?';
-        params.push(scopeId);
+      sql += ' AND scope_id = ?';
+      params.push(scopeId);
     } else {
-        sql += ' AND scope_id IS NULL';
+      sql += ' AND scope_id IS NULL';
     }
     sql += ' ORDER BY effective_at DESC';
     const res = await db.execute(sql, params);
-    return res.rows?._array || [];
+    return (res.rows as Fact[]) || [];
   }
 };

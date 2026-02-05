@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { SpaceRepo, Space } from '../../src/repositories/space_repo';
 import { Colors } from '../../src/constants/Colors';
-import { useFocusEffect } from '@expo/router';
+import { useFocusEffect } from 'expo-router';
 import { CaptureFAB } from '../../src/components/CaptureFAB';
 
 export default function SpacesScreen() {
@@ -25,7 +25,7 @@ export default function SpacesScreen() {
   const renderItem = ({ item }: { item: Space }) => (
     <TouchableOpacity
       style={styles.item}
-      onPress={() => router.push(\`/space/\${item.id}\`)}
+      onPress={() => router.push(`/space/${item.id}`)}
     >
       <Text style={styles.itemName}>{item.name}</Text>
       <Text style={styles.itemDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
@@ -39,7 +39,7 @@ export default function SpacesScreen() {
         renderItem={renderItem}
         estimatedItemSize={60}
       />
-      <CaptureFAB onPress={() => console.log('Capture Tapped')} />
+      <CaptureFAB onPress={() => router.push('/space/new')} />
     </View>
   );
 }
@@ -59,11 +59,11 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   itemName: {
-      fontSize: 18,
-      fontWeight: '500'
+    fontSize: 18,
+    fontWeight: '500'
   },
   itemDate: {
-      color: Colors.secondaryText,
-      fontSize: 14
+    color: Colors.secondaryText,
+    fontSize: 14
   }
 });
