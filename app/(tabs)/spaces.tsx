@@ -167,7 +167,7 @@ export default function SpacesScreen() {
       />
       {!isEditing && <CaptureFAB onPress={() => router.push('/space/new')} />}
       <Text style={{ position: 'absolute', bottom: 80, left: 10, fontSize: 10, color: '#888' }}>
-        Build: Feb6-1430
+        Build: Feb6-1550
       </Text>
 
       <Modal
