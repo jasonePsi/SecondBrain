@@ -73,7 +73,19 @@ export const LLMService = {
         const path = activeModel.path;
         console.log(`Initializing LLM with model: ${activeModel.model_id} at ${path}`);
 
-        const nCtx = activeModel.model_id === 'phi-3-mini' ? 4096 : 2048;
+        const nCtx = [
+            'phi-3-mini',
+            'phi-3.5-mini',
+            'llama-3.2-3b',
+            'llama-3.1-8b',
+            'qwen2.5-3b',
+            'qwen2.5-7b',
+            'mistral-7b',
+            'gemma-2-2b',
+            'gemma-2-9b'
+        ].includes(activeModel.model_id)
+            ? 4096
+            : 2048;
 
         context = await initLlama({
             model: path,

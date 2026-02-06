@@ -149,9 +149,11 @@ export default function SpacesScreen() {
           title: 'Spaces',
           headerRight: () => (
             <TouchableOpacity onPress={toggleEdit} style={{ marginRight: 12 }}>
-              <Text style={{ color: Colors.primary, fontWeight: '600' }}>
-                {isEditing ? 'Done' : 'Edit'}
-              </Text>
+              <Ionicons
+                name={isEditing ? 'checkmark-circle' : 'ellipsis-horizontal-circle'}
+                size={26}
+                color={Colors.primary}
+              />
             </TouchableOpacity>
           )
         }}
