@@ -5,7 +5,8 @@ const TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS spaces (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY NOT NULL,
@@ -124,6 +125,27 @@ export async function runMigrations() {
         )
       `);
       await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [3, Date.now()]);
+    });
+  }
+
+  if (currentVersion < 4) {
+    console.log('Running Migration 4: Space ordering...');
+    await db.transaction(async (tx) => {
+      const tableInfo = await tx.execute('PRAGMA table_info(spaces)');
+      const columns = (tableInfo.rows as any[]).map((row) => row.name);
+
+      if (!columns.includes('sort_order')) {
+        await tx.execute('ALTER TABLE spaces ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+      }
+
+      const res = await tx.execute('SELECT id FROM spaces ORDER BY name ASC, created_at ASC');
+      let order = 0;
+      for (const row of res.rows as any[]) {
+        await tx.execute('UPDATE spaces SET sort_order = ? WHERE id = ?', [order, row.id]);
+        order += 1;
+      }
+
+      await tx.execute('INSERT INTO migrations (version, ran_at) VALUES (?, ?)', [4, Date.now()]);
     });
   }
 }

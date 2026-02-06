@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, NativeModules } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { ActionSheetIOS, ActivityIndicator, Alert, KeyboardAvoidingView, NativeModules, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Message, MessageRepo } from '../../src/repositories/message_repo';
 import { ThreadRepo } from '../../src/repositories/thread_repo';
 import { Colors } from '../../src/constants/Colors';
 import { Ionicons } from '@expo/vector-icons';
-import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { ChatMessage, LLMService, sanitizeAssistantResponse } from '../../src/services/LLMService';
 
 // Get device language
 const deviceLocale = Platform.OS === 'ios'
@@ -27,6 +28,10 @@ export default function ThreadScreen() {
     const [isRecording, setIsRecording] = useState(false);
     const [transcriptBuffer, setTranscriptBuffer] = useState('');
     const [speechLang, setSpeechLang] = useState<'el-GR' | 'en-US'>(isGreekDevice ? 'el-GR' : 'en-US'); // Default to device language
+    const [isLoading, setIsLoading] = useState(false);
+    const [llmReady, setLlmReady] = useState(false);
+    const llmInitializing = useRef(false);
+    const [micStatus, setMicStatus] = useState('Idle');
 
     useEffect(() => {
         const init = async () => {
@@ -34,6 +39,21 @@ export default function ThreadScreen() {
                 const t = await ThreadRepo.get(id);
                 if (t) setThreadTitle(t.title);
                 await loadMessages();
+            }
+
+            // Initialize LLM if not already
+            if (!llmInitializing.current && !llmReady) {
+                llmInitializing.current = true;
+                try {
+                    await LLMService.init();
+                    setLlmReady(true);
+                    console.log('LLM initialized successfully');
+                } catch (error) {
+                    console.error('Failed to initialize LLM:', error);
+                    Alert.alert('AI Error', 'Could not initialize AI model. Please check Settings.');
+                } finally {
+                    llmInitializing.current = false;
+                }
             }
         };
         init();
@@ -46,40 +66,120 @@ export default function ThreadScreen() {
         }
     }, [transcriptBuffer]);
 
-    // Handle speech results - try multiple event names for robustness
+    // Handle speech results
     useSpeechRecognitionEvent('result', (event) => {
         if (event.results && event.results.length > 0) {
             const result = event.results[event.results.length - 1];
-            if (result && result[0]) {
-                setTranscriptBuffer(result[0].transcript);
+            if (result && result.transcript) {
+                setTranscriptBuffer(result.transcript);
+                setMicStatus('Heard: ' + result.transcript.substring(0, 15) + '...');
             }
         }
     });
 
-    useSpeechRecognitionEvent('speechstart', () => setIsRecording(true));
-    useSpeechRecognitionEvent('speechend', () => setIsRecording(false));
-
-    // Handle speech errors
+    useSpeechRecognitionEvent('speechstart', () => {
+        setIsRecording(true);
+        setMicStatus('Listening...');
+    });
+    useSpeechRecognitionEvent('speechend', () => {
+        setIsRecording(false);
+        setMicStatus('Processing...');
+    });
     useSpeechRecognitionEvent('error', (event) => {
         console.error('Speech error:', event);
         setIsRecording(false);
+        setMicStatus('Error: ' + event.error + ' - ' + event.message);
         if (event.error === 'not-allowed') {
-            Alert.alert('Permission Required', 'Please allow microphone access in Settings.');
+            Alert.alert('Permission Required', 'Please enable microphone access in Settings.');
         }
     });
 
     const loadMessages = async () => {
         if (!id) return;
         const data = await MessageRepo.listByThread(id);
-        setMessages(data);
+        // Chronological order for normal list (oldest -> newest)
+        const sorted = [...data].sort((a, b) => a.created_at - b.created_at);
+        setMessages(sorted);
     };
 
     const sendMessage = async () => {
         if (!id || !inputText.trim()) return;
-        await MessageRepo.create(id, 'user', inputText.trim());
+
+        const userMessage = inputText.trim();
         setInputText('');
         setTranscriptBuffer('');
-        await loadMessages();
+        setIsLoading(true);
+
+        try {
+            if (isRecording) {
+                try {
+                    await ExpoSpeechRecognitionModule.stop();
+                } catch (e: any) {
+                    console.error('Stop error:', e);
+                } finally {
+                    setIsRecording(false);
+                    setMicStatus('Stopped');
+                }
+            }
+
+            // Save user message
+            await MessageRepo.create(id, 'user', userMessage);
+            await loadMessages();
+
+            // Ensure correct model is loaded (re-init if model changed)
+            try {
+                await LLMService.init();
+                if (!llmReady) setLlmReady(true);
+            } catch (e) {
+                throw new Error('AI model not ready. Please check Settings.');
+            }
+
+            // Build conversation context
+            const currentMessages = await MessageRepo.listByThread(id);
+            // Get last messages (newest first in repo, so take first immediately)
+            // But we need them in chronological order for the prompt
+            const contextMessages = [...currentMessages]
+                .sort((a, b) => a.created_at - b.created_at) // Chronological (Old -> New)
+                .slice(-6); // Keep context short for small local models
+
+            const cleanedContext = contextMessages
+                .map((msg) => {
+                    if (msg.role !== 'assistant') return msg;
+                    return { ...msg, text: sanitizeAssistantResponse(msg.text) };
+                })
+                .filter((msg) => msg.text.trim().length > 0);
+
+            const systemPrompt = [
+                'You are a helpful assistant for a personal knowledge base.',
+                'Reply in the same language as the user. Be concise.',
+                'Do not invent facts like phone numbers, names, or dates.',
+                'If information is missing, say you do not know and ask a follow-up question.',
+                'Only output the answer; no labels or special tokens.'
+            ].join(' ');
+            const chatMessages: ChatMessage[] = [
+                { role: 'system', content: systemPrompt },
+                ...cleanedContext.map((msg) => ({
+                    role: msg.role,
+                    content: msg.text
+                }))
+            ];
+
+            const response = await LLMService.chat(chatMessages);
+
+            // Save AI response
+            if (response && response.trim()) {
+                await MessageRepo.create(id, 'assistant', response.trim());
+            } else {
+                await MessageRepo.create(id, 'assistant', '...');
+            }
+
+            await loadMessages();
+        } catch (error: any) {
+            console.error('Error sending message:', error);
+            Alert.alert('Error', error.message || 'Failed to get AI response.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const toggleLanguage = useCallback(() => {
@@ -90,43 +190,50 @@ export default function ThreadScreen() {
         if (isRecording) {
             try {
                 await ExpoSpeechRecognitionModule.stop();
-            } catch (e) {
+                setMicStatus('Stopped');
+            } catch (e: any) {
                 console.error('Stop error:', e);
+                setMicStatus('Stop error: ' + e.message);
             }
             setIsRecording(false);
         } else {
             try {
+                setMicStatus('Requesting perms...');
                 const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
                 if (!result.granted) {
                     Alert.alert('Permission Required', 'Please allow microphone and speech recognition access.');
+                    setMicStatus('Perm denied');
                     return;
                 }
                 setTranscriptBuffer('');
                 setIsRecording(true);
+                setMicStatus('Starting...');
 
-                // Use selected language, allow server recognition for better mixed language support
+                // Use selected language
                 await ExpoSpeechRecognitionModule.start({
                     lang: speechLang,
                     interimResults: true,
                     maxAlternatives: 1,
                     continuous: true,
-                    requiresOnDeviceRecognition: false, // Allow server-based for better accuracy
-                    addsPunctuation: true, // Auto-punctuate
+                    requiresOnDeviceRecognition: false,
+                    addsPunctuation: true,
                 });
-            } catch (e) {
+            } catch (e: any) {
                 console.error('Start error:', e);
                 setIsRecording(false);
-                Alert.alert('Error', 'Could not start speech recognition. Please try again.');
+                setMicStatus('Start error: ' + e.message);
+                Alert.alert('Error', 'Could not start speech recognition.');
             }
         }
     }, [isRecording, speechLang]);
 
     const renderItem = ({ item }: { item: Message }) => {
         const isUser = item.role === 'user';
+        const displayText = isUser ? item.text : sanitizeAssistantResponse(item.text);
         return (
             <View style={[styles.bubbleWrapper, isUser ? styles.userWrapper : styles.assistantWrapper]}>
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-                    <Text style={isUser ? styles.userText : styles.assistantText}>{item.text}</Text>
+                    <Text style={isUser ? styles.userText : styles.assistantText}>{displayText}</Text>
                     <Text style={styles.bubbleMeta}>{item.role}</Text>
                 </View>
             </View>
@@ -208,7 +315,6 @@ export default function ThreadScreen() {
                         data={messages}
                         renderItem={renderItem}
                         estimatedItemSize={80}
-                        inverted
                         contentContainerStyle={{ padding: 16 }}
                     />
                 </View>
@@ -217,27 +323,35 @@ export default function ThreadScreen() {
                         style={styles.input}
                         value={inputText}
                         onChangeText={setInputText}
-                        placeholder={isRecording ? `Listening (${speechLang === 'el-GR' ? 'ΕΛ' : 'EN'})... Tap mic to stop` : "Type or tap mic to speak..."}
+                        placeholder={isRecording ? `Listening... ${micStatus}` : "Type or tap mic..."}
                         placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
                         multiline
+                        editable={!isLoading}
                     />
+                    {micStatus !== 'Idle' && <Text style={{ fontSize: 10, color: 'gray', position: 'absolute', top: -15, left: 12 }}>{micStatus}</Text>}
                     <TouchableOpacity
                         onPress={toggleLanguage}
                         style={styles.langButton}
+                        disabled={isLoading}
                     >
                         <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         onPress={toggleRecording}
                         style={[styles.micButton, isRecording && styles.micActive]}
+                        disabled={isLoading}
                     >
                         <Ionicons
                             name={isRecording ? "stop" : "mic"}
                             size={28}
-                            color={isRecording ? "white" : Colors.primary}
+                            color={isRecording ? "white" : (isLoading ? Colors.secondaryText : Colors.primary)}
                         />
                     </TouchableOpacity>
-                    {inputText.length > 0 && (
+                    {isLoading ? (
+                        <View style={styles.sendButton}>
+                            <ActivityIndicator size="small" color={Colors.primary} />
+                        </View>
+                    ) : inputText.length > 0 && (
                         <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
                             <Ionicons name="send" size={28} color={Colors.primary} />
                         </TouchableOpacity>

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator
 import { useFocusEffect } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
 import { ModelManager } from '../../src/services/ModelManager';
+import { LLMService } from '../../src/services/LLMService';
 import { getAllModels, getModelById, ModelConfig } from '../../src/constants/ModelRegistry';
 import { ModelSetting } from '../../src/repositories/model_repo';
 
@@ -79,6 +80,7 @@ export default function SettingsScreen() {
 
             // Switch to model
             await ModelManager.setActiveModel(modelId);
+            await LLMService.release();
             Alert.alert('Success', 'Model switched successfully!');
             await loadData();
         } catch (error: any) {
