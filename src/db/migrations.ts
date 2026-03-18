@@ -1,5 +1,7 @@
 import { db } from './client';
 
+const TARGET_MIGRATION_VERSION = 8;
+
 const TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS spaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -115,7 +117,7 @@ export async function runMigrations() {
   const result = await db.execute('SELECT MAX(version) as version FROM migrations');
   const currentVersion = Number((result.rows as any[])?.[0]?.version || 0);
 
-  console.log('Current DB Version:', currentVersion);
+  console.log('Current DB Version:', currentVersion, 'Target:', TARGET_MIGRATION_VERSION);
 
   if (currentVersion < 1) {
     console.log('Running Migration 1: Schema...');

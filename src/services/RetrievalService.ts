@@ -1,47 +1,9 @@
 import { Message, MessageRepo } from '../repositories/message_repo';
+import { scoreMessage, tokenize } from './retrieval_utils';
 
 const DEFAULT_RECENT_OFFSET = 12;
 const DEFAULT_CANDIDATE_LIMIT = 180;
 const DEFAULT_MAX_RESULTS = 4;
-
-const tokenize = (text: string): string[] => {
-    const lower = text.toLowerCase();
-    const normalized = lower
-        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    if (!normalized) return [];
-
-    const seen = new Set<string>();
-    const tokens: string[] = [];
-    for (const token of normalized.split(' ')) {
-        if (token.length < 3) continue;
-        if (seen.has(token)) continue;
-        seen.add(token);
-        tokens.push(token);
-        if (tokens.length >= 12) break;
-    }
-    return tokens;
-};
-
-const scoreMessage = (message: Message, query: string, queryTokens: string[]) => {
-    const haystack = message.text.toLowerCase();
-    const matchedTokens = queryTokens.filter((token) => haystack.includes(token));
-    const overlap = matchedTokens.length;
-    const densityScore = queryTokens.length > 0
-        ? Math.round((overlap / queryTokens.length) * 20)
-        : 0;
-    const phraseBoost = query.length >= 8 && haystack.includes(query.toLowerCase()) ? 30 : 0;
-    const recencyBoost = Math.floor(message.created_at / 1_000_000_000_000);
-    const score = overlap * 100 + densityScore + phraseBoost + recencyBoost;
-
-    return {
-        message,
-        score,
-        overlap,
-        matchedTokens
-    };
-};
 
 export interface RetrievedMessageHit {
     message: Message;
@@ -58,6 +20,7 @@ export const RetrievalService = {
             recentOffset?: number;
             candidateLimit?: number;
             maxResults?: number;
+            turnId?: string;
         }
     ): Promise<RetrievedMessageHit[]> => {
         const excludeMessageIds = options?.excludeMessageIds ?? new Set<string>();
@@ -93,6 +56,7 @@ export const RetrievalService = {
             .sort((a, b) => a.message.created_at - b.message.created_at);
 
         console.log('[RetrievalService] older retrieval', {
+            turnId: options?.turnId,
             threadId,
             queryTokens: queryTokens.length,
             candidates: filteredCandidates.length,
@@ -105,4 +69,9 @@ export const RetrievalService = {
             matchedTokens: item.matchedTokens
         }));
     }
+};
+
+export const __retrievalTestUtils = {
+    tokenize,
+    scoreMessage
 };

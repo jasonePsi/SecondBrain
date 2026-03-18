@@ -3,8 +3,7 @@ import { FactRepo } from '../repositories/fact_repo';
 import { SpaceRepo } from '../repositories/space_repo';
 import { ThreadRepo } from '../repositories/thread_repo';
 import { FeedRepo } from '../repositories/feed_repo';
-
-type SupportedScope = 'thread' | 'space' | 'global';
+import { normalizeScope, parseTimestamp, SupportedScope } from './ops_executor_utils';
 
 interface OpsExecutionLog {
     op: string;
@@ -18,39 +17,6 @@ export interface OpsExecutionReport {
     failedCount: number;
     logs: OpsExecutionLog[];
 }
-
-const parseTimestamp = (value: unknown): number | null => {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-};
-
-const normalizeScope = (
-    requestedScope: unknown,
-    currentSpaceId?: string,
-    currentThreadId?: string
-): { scopeType: SupportedScope; scopeId: string | null } => {
-    const validRequestedScope = (
-        requestedScope === 'thread' || requestedScope === 'space' || requestedScope === 'global'
-    )
-        ? requestedScope
-        : null;
-
-    const scopeType: SupportedScope = validRequestedScope
-        ? validRequestedScope
-        : (currentThreadId ? 'thread' : currentSpaceId ? 'space' : 'global');
-
-    if (scopeType === 'thread') {
-        return { scopeType, scopeId: currentThreadId || null };
-    }
-    if (scopeType === 'space') {
-        return { scopeType, scopeId: currentSpaceId || null };
-    }
-    return { scopeType, scopeId: null };
-};
 
 const resolveFeedSpaceIdForScope = async (
     scopeType: SupportedScope,
@@ -70,7 +36,10 @@ export const OpsExecutor = {
     execute: async (
         jsonResult: any,
         currentSpaceId?: string,
-        currentThreadId?: string
+        currentThreadId?: string,
+        options?: {
+            turnId?: string;
+        }
     ): Promise<OpsExecutionReport> => {
         const ops = Array.isArray(jsonResult)
             ? jsonResult
@@ -80,7 +49,7 @@ export const OpsExecutor = {
         let skippedCount = 0;
         let failedCount = 0;
 
-        for (const opItem of ops) {
+        for (const [index, opItem] of ops.entries()) {
             const op = opItem?.op;
             const data = opItem?.data || {};
 
@@ -95,7 +64,11 @@ export const OpsExecutor = {
 
                         if (!timestamp) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'Missing or invalid schedule timestamp' });
+                            logs.push({
+                                op,
+                                status: 'skipped',
+                                detail: `#${index} Missing or invalid schedule timestamp`
+                            });
                             break;
                         }
 
@@ -109,12 +82,12 @@ export const OpsExecutor = {
                     case 'UPSERT_FACT': {
                         if (typeof data?.key !== 'string' || data.key.trim().length === 0) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'Missing fact key' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} Missing fact key` });
                             break;
                         }
                         if (data.value === undefined) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'Missing fact value' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} Missing fact value` });
                             break;
                         }
 
@@ -142,7 +115,7 @@ export const OpsExecutor = {
                     case 'UPDATE_THREAD': {
                         if (!currentThreadId) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'No active thread context' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} No active thread context` });
                             break;
                         }
 
@@ -162,7 +135,7 @@ export const OpsExecutor = {
 
                         if (Object.keys(updates).length === 0) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'No valid thread update fields' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} No valid thread update fields` });
                             break;
                         }
 
@@ -177,7 +150,7 @@ export const OpsExecutor = {
                     case 'UPSERT_SPACE': {
                         if (!data?.name || typeof data.name !== 'string' || data.name.trim().length === 0) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'Missing space name' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} Missing space name` });
                             break;
                         }
                         const createdSpaceId = await SpaceRepo.create(data.name.trim());
@@ -190,7 +163,7 @@ export const OpsExecutor = {
                     case 'UPSERT_THREAD': {
                         if (!currentSpaceId || typeof data?.title !== 'string' || data.title.trim().length === 0) {
                             skippedCount += 1;
-                            logs.push({ op, status: 'skipped', detail: 'Missing space context or title' });
+                            logs.push({ op, status: 'skipped', detail: `#${index} Missing space context or title` });
                             break;
                         }
                         const createdThreadId = await ThreadRepo.create(currentSpaceId, data.title.trim());
@@ -202,7 +175,11 @@ export const OpsExecutor = {
 
                     default:
                         skippedCount += 1;
-                        logs.push({ op: op || 'UNKNOWN', status: 'skipped', detail: 'Unsupported operation' });
+                        logs.push({
+                            op: op || 'UNKNOWN',
+                            status: 'skipped',
+                            detail: `#${index} Unsupported operation`
+                        });
                         break;
                 }
             } catch (error: any) {
@@ -210,7 +187,7 @@ export const OpsExecutor = {
                 logs.push({
                     op: op || 'UNKNOWN',
                     status: 'failed',
-                    detail: error?.message || 'Execution failed'
+                    detail: `#${index} ${error?.message || 'Execution failed'}`
                 });
                 console.error('[OpsExecutor] failed op', { opItem, error });
             }
@@ -223,7 +200,15 @@ export const OpsExecutor = {
             logs
         };
 
-        console.log('[OpsExecutor] execution report', report);
+        console.log('[OpsExecutor] execution report', {
+            turnId: options?.turnId,
+            ...report
+        });
         return report;
     }
+};
+
+export const __opsExecutorTestUtils = {
+    parseTimestamp,
+    normalizeScope
 };

@@ -5,6 +5,25 @@ import { runMigrations } from "../src/db/migrations";
 import { ModelManager } from "../src/services/ModelManager";
 import { LLMService } from "../src/services/LLMService";
 
+type InitialRoute = '/(tabs)/spaces' | '/(tabs)/settings' | '/onboarding/model-selection';
+
+const resolveInitialRoute = async (): Promise<InitialRoute> => {
+    const activeProvider = await LLMService.getActiveProvider();
+    if (activeProvider === 'cloud') {
+        const cloudStatus = await LLMService.getProviderStatus('cloud');
+        return cloudStatus.available ? '/(tabs)/spaces' : '/(tabs)/settings';
+    }
+
+    const [installedModels, activeModel] = await Promise.all([
+        ModelManager.getInstalledModels(),
+        ModelManager.getActiveModel()
+    ]);
+
+    if (activeModel) return '/(tabs)/spaces';
+    if (installedModels.length === 0) return '/onboarding/model-selection';
+    return '/(tabs)/settings';
+};
+
 export default function Index() {
     const router = useRouter();
 
@@ -14,33 +33,9 @@ export default function Index() {
                 console.log('Running database migrations...');
                 await runMigrations();
                 console.log('Migrations complete');
-
-                const activeProvider = await LLMService.getActiveProvider();
-                if (activeProvider === 'cloud') {
-                    const cloudStatus = await LLMService.getProviderStatus('cloud');
-                    if (cloudStatus.available) {
-                        console.log('Cloud provider selected and available, redirecting to app...');
-                        router.replace('/(tabs)/spaces');
-                    } else {
-                        console.log('Cloud provider selected but unavailable, redirecting to settings...');
-                        router.replace('/(tabs)/settings');
-                    }
-                    return;
-                }
-
-                const installedModels = await ModelManager.getInstalledModels();
-                const activeModel = await ModelManager.getActiveModel();
-
-                if (activeModel) {
-                    console.log('Active model found, redirecting to app...');
-                    router.replace('/(tabs)/spaces');
-                } else if (installedModels.length === 0) {
-                    console.log('No installed model found, redirecting to onboarding...');
-                    router.replace('/onboarding/model-selection');
-                } else {
-                    console.log('Installed models found but no active model, redirecting to settings...');
-                    router.replace('/(tabs)/settings');
-                }
+                const nextRoute = await resolveInitialRoute();
+                console.log('Initialization complete, routing to', nextRoute);
+                router.replace(nextRoute);
             } catch (error) {
                 console.error('Initialization failed:', error);
                 // Still try to continue to onboarding

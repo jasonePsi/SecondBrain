@@ -4,8 +4,13 @@ import { Message, MessageRepo } from '../repositories/message_repo';
 import { ThreadRepo } from '../repositories/thread_repo';
 import { safeJsonParse } from '../repositories/json_utils';
 import { LLMService, sanitizeAssistantResponse } from './LLMService';
-import type { ChatMessage } from './LLMService';
+import type { AIProviderType, ChatMessage } from './LLMService';
 import { RetrievedMessageHit, RetrievalService } from './RetrievalService';
+import {
+    clipText,
+    estimateContextMessageChars,
+    selectMessagesWithinCharBudget
+} from './memory_context_utils';
 
 const RECENT_MESSAGE_LIMIT = 10;
 const MAX_RETRIEVED_OLDER_MESSAGES = 4;
@@ -18,11 +23,7 @@ const SUMMARY_UPDATE_STEP = 4;
 const SUMMARY_WINDOW_MESSAGES = 20;
 const MAX_MEMORY_BLOCK_CHARS = 2200;
 const MAX_CONTEXT_MESSAGE_CHARS = 380;
-
-const clipText = (text: string, maxChars = 240): string => {
-    if (text.length <= maxChars) return text;
-    return text.slice(0, maxChars - 1).trimEnd() + '…';
-};
+const MAX_TOTAL_CONTEXT_CHARS = 6000;
 
 const formatFactValue = (fact: Fact): string => {
     const parsed = safeJsonParse<any>(fact.value_json, fact.value_json);
@@ -76,6 +77,7 @@ const toContextMessage = (message: Message): ChatMessage | null => {
         content: normalized
     };
 };
+
 
 const buildMemoryBlock = (context: {
     summary: string | null;
@@ -177,6 +179,8 @@ export interface MemoryContextPackage {
     globalFacts: Fact[];
     openActions: Action[];
     chatMessages: ChatMessage[];
+    contextChars: number;
+    droppedRecentMessages: number;
 }
 
 export interface SummaryUpdateResult {
@@ -185,10 +189,21 @@ export interface SummaryUpdateResult {
     messageCount: number;
 }
 
+interface MemoryBuildOptions {
+    turnId?: string;
+}
+
+interface SummaryUpdateOptions {
+    provider?: AIProviderType;
+    requestId?: string;
+    turnId?: string;
+}
+
 export const MemoryService = {
     buildTurnContext: async (
         threadId: string,
-        userInput: string
+        userInput: string,
+        options?: MemoryBuildOptions
     ): Promise<MemoryContextPackage> => {
         const thread = await ThreadRepo.get(threadId);
         if (!thread) {
@@ -216,7 +231,8 @@ export const MemoryService = {
             {
                 excludeMessageIds: recentIds,
                 recentOffset: recentMessages.length,
-                maxResults: MAX_RETRIEVED_OLDER_MESSAGES
+                maxResults: MAX_RETRIEVED_OLDER_MESSAGES,
+                turnId: options?.turnId
             }
         );
 
@@ -236,41 +252,56 @@ export const MemoryService = {
             olderMessageHits
         });
 
+        const baseSystemPrompt = [
+            'You are a local memory-aware assistant for a personal knowledge base.',
+            'Reply in the user language, be concise, and do not invent facts.',
+            'If key details are missing, ask one clear follow-up question.'
+        ].join(' ');
+
         const chatMessages: ChatMessage[] = [
             {
                 role: 'system',
-                content: [
-                    'You are a local memory-aware assistant for a personal knowledge base.',
-                    'Reply in the user language, be concise, and do not invent facts.',
-                    'If key details are missing, ask one clear follow-up question.'
-                ].join(' ')
+                content: baseSystemPrompt
             }
         ];
+
+        let reservedChars = estimateContextMessageChars(chatMessages[0]);
 
         if (memoryBlock.length > 0) {
             chatMessages.push({
                 role: 'system',
                 content: memoryBlock
             });
+            reservedChars += estimateContextMessageChars(chatMessages[1]);
         }
 
-        recentMessages.forEach((message) => {
-            const contextMessage = toContextMessage(message);
-            if (!contextMessage) return;
-            chatMessages.push(contextMessage);
+        const candidateContextMessages = recentMessages
+            .map((message) => toContextMessage(message))
+            .filter((message): message is ChatMessage => !!message);
+        const recentSelection = selectMessagesWithinCharBudget(candidateContextMessages, {
+            maxChars: MAX_TOTAL_CONTEXT_CHARS,
+            reservedChars
+        });
+        recentSelection.selectedMessages.forEach((message) => {
+            chatMessages.push(message);
         });
 
         console.log('[MemoryService] built context', {
+            turnId: options?.turnId,
             threadId,
             spaceId: thread.space_id,
             summary: !!thread.summary_text,
             recentMessages: recentMessages.length,
+            includedRecentMessages: recentSelection.selectedMessages.length,
+            droppedRecentMessages: recentSelection.droppedCount,
             olderHits: olderMessageHits.length,
             threadFacts: threadFacts.length,
             spaceFacts: spaceFacts.length,
             globalFacts: globalFacts.length,
             openActions: openActions.length,
-            chatMessages: chatMessages.length
+            chatMessages: chatMessages.length,
+            contextChars: recentSelection.usedChars,
+            maxContextChars: MAX_TOTAL_CONTEXT_CHARS
         });
 
         return {
@@ -283,11 +314,16 @@ export const MemoryService = {
             spaceFacts,
             globalFacts,
             openActions,
-            chatMessages
+            chatMessages,
+            contextChars: recentSelection.usedChars,
+            droppedRecentMessages: recentSelection.droppedCount
         };
     },
 
-    updateThreadSummaryIfNeeded: async (threadId: string): Promise<SummaryUpdateResult> => {
+    updateThreadSummaryIfNeeded: async (
+        threadId: string,
+        options?: SummaryUpdateOptions
+    ): Promise<SummaryUpdateResult> => {
         const thread = await ThreadRepo.get(threadId);
         if (!thread) {
             return { updated: false, summaryLength: 0, messageCount: 0 };
@@ -324,7 +360,11 @@ export const MemoryService = {
         }
 
         const summaryPrompt = buildSummaryPrompt(thread.summary_text, recentMessages);
-        const summaryResponse = await LLMService.chat(summaryPrompt, { task: 'summary' });
+        const summaryResponse = await LLMService.chat(summaryPrompt, {
+            task: 'summary',
+            provider: options?.provider,
+            requestId: options?.requestId
+        });
         const normalizedSummary = clipText(
             sanitizeAssistantResponse(summaryResponse).replace(/\s+/g, ' ').trim(),
             1200
@@ -345,6 +385,7 @@ export const MemoryService = {
         });
 
         console.log('[MemoryService] summary updated', {
+            turnId: options?.turnId,
             threadId,
             totalMessages,
             summaryLength: normalizedSummary.length
@@ -356,4 +397,9 @@ export const MemoryService = {
             messageCount: totalMessages
         };
     }
+};
+
+export const __memoryTestUtils = {
+    clipText,
+    selectRecentContextMessages: selectMessagesWithinCharBudget
 };

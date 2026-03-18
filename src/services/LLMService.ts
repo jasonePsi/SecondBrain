@@ -21,6 +21,10 @@ const providerMap = {
     cloud: cloudProvider
 } as const;
 
+const getProviderImplByType = (providerType: AIProviderType) => {
+    return providerMap[providerType];
+};
+
 const getStoredProvider = async (): Promise<AIProviderType> => {
     try {
         const stored = await AppSettingsRepo.getString(ACTIVE_AI_PROVIDER_KEY);
@@ -35,9 +39,9 @@ const persistProvider = async (provider: AIProviderType): Promise<void> => {
     await AppSettingsRepo.setString(ACTIVE_AI_PROVIDER_KEY, provider);
 };
 
-const getActiveProviderImpl = async () => {
-    const activeProvider = await getStoredProvider();
-    return providerMap[activeProvider];
+const resolveProviderType = async (preferred?: AIProviderType): Promise<AIProviderType> => {
+    if (preferred) return preferred;
+    return await getStoredProvider();
 };
 
 const normalizeError = (error: unknown, fallback: string): Error => {
@@ -49,8 +53,9 @@ const normalizeError = (error: unknown, fallback: string): Error => {
 };
 
 export const LLMService = {
-    init: async (): Promise<void> => {
-        const provider = await getActiveProviderImpl();
+    init: async (preferredProvider?: AIProviderType): Promise<void> => {
+        const providerType = await resolveProviderType(preferredProvider);
+        const provider = getProviderImplByType(providerType);
         await provider.init();
     },
 
@@ -65,11 +70,25 @@ export const LLMService = {
         messages: ChatMessage[],
         options?: AIRequestOptions
     ): Promise<string> => {
-        const provider = await getActiveProviderImpl();
+        const providerType = await resolveProviderType(options?.provider);
+        const provider = getProviderImplByType(providerType);
+        console.log('[LLMService] chat request', {
+            provider: providerType,
+            task: options?.task || 'assistant',
+            requestId: options?.requestId,
+            messageCount: messages.length
+        });
         try {
             return await provider.chat(messages, options);
         } catch (error) {
-            throw normalizeError(error, 'Failed to generate assistant response');
+            const normalized = normalizeError(error, 'Failed to generate assistant response');
+            console.warn('[LLMService] chat failed', {
+                provider: providerType,
+                task: options?.task || 'assistant',
+                requestId: options?.requestId,
+                message: normalized.message
+            });
+            throw normalized;
         }
     },
 
@@ -77,12 +96,30 @@ export const LLMService = {
         prompt: string,
         options?: AIRequestOptions
     ): Promise<string> => {
-        const provider = await getActiveProviderImpl();
+        const providerType = await resolveProviderType(options?.provider);
+        const provider = getProviderImplByType(providerType);
+        console.log('[LLMService] process request', {
+            provider: providerType,
+            task: options?.task || 'extraction',
+            requestId: options?.requestId,
+            promptChars: prompt.length
+        });
         try {
             return await provider.process(prompt, options);
         } catch (error) {
-            throw normalizeError(error, 'Failed to process structured output');
+            const normalized = normalizeError(error, 'Failed to process structured output');
+            console.warn('[LLMService] process failed', {
+                provider: providerType,
+                task: options?.task || 'extraction',
+                requestId: options?.requestId,
+                message: normalized.message
+            });
+            throw normalized;
         }
+    },
+
+    resolveProviderForTurn: async (preferredProvider?: AIProviderType): Promise<AIProviderType> => {
+        return await resolveProviderType(preferredProvider);
     },
 
     getActiveProvider: async (): Promise<AIProviderType> => {
@@ -90,7 +127,7 @@ export const LLMService = {
     },
 
     setActiveProvider: async (provider: AIProviderType): Promise<void> => {
-        const targetProvider = providerMap[provider];
+        const targetProvider = getProviderImplByType(provider);
         if (provider === 'cloud') {
             const status = await targetProvider.getStatus();
             if (!status.available) {
@@ -103,7 +140,7 @@ export const LLMService = {
     },
 
     getProviderStatus: async (provider: AIProviderType): Promise<AIProviderStatus> => {
-        return await providerMap[provider].getStatus();
+        return await getProviderImplByType(provider).getStatus();
     },
 
     listProviderStatuses: async (): Promise<AIProviderStatus[]> => {

@@ -4,7 +4,10 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "check": "node --check src/server.js",
+    "test": "npm run check",
+    "verify": "npm run check"
   },
   "dependencies": {
     "cors": "^2.8.5",

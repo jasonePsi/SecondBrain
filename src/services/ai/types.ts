@@ -13,6 +13,7 @@ export interface AIRequestOptions {
     task?: AIWorkload;
     timeoutMs?: number;
     requestId?: string;
+    provider?: AIProviderType;
 }
 
 export interface AIProviderStatus {

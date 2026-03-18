@@ -7,6 +7,24 @@
 3. `src/db/migrations.ts` defines additive schema evolution and index creation.
 4. Screen state is refreshed from repos/services after mutating operations (create, rename, delete, status changes).
 
+## App Bootstrap Flow
+
+Startup entrypoint is `app/index.tsx`.
+
+Initialization order:
+
+1. Run `runMigrations()` from `src/db/migrations.ts`.
+2. Read active AI provider from `LLMService`.
+3. If cloud is active:
+   - route to app if proxy is available
+   - route to settings if proxy is unavailable
+4. If local provider path is active:
+   - route to app when an active local model exists
+   - route to onboarding when no models are installed
+   - route to settings when models exist but none is active
+
+SQLite client setup happens in `src/db/client.ts`.
+
 Core tables:
 
 - `spaces`, `threads`, `messages`

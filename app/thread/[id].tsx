@@ -67,6 +67,15 @@ const getInitialSpeechLanguage = (): SupportedSpeechLanguage => {
     return 'en-US';
 };
 
+const createTurnId = (): string => {
+    const suffix = Math.random().toString(36).slice(2, 9);
+    return `turn_${Date.now()}_${suffix}`;
+};
+
+const getUserFacingTurnError = (): string => {
+    return 'Could not generate a reply right now. Check your provider/model settings and try again.';
+};
+
 export default function ThreadScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
@@ -82,6 +91,8 @@ export default function ThreadScreen() {
     const [llmReady, setLlmReady] = useState(false);
     const llmInitializing = useRef(false);
     const postProcessingQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const isMountedRef = useRef(true);
+    const inFlightTurnIdRef = useRef<string | null>(null);
     const [micStatus, setMicStatus] = useState('Idle');
 
     const [loadingInitialMessages, setLoadingInitialMessages] = useState(true);
@@ -92,6 +103,13 @@ export default function ThreadScreen() {
 
     const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
     const [renameValue, setRenameValue] = useState('');
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const refreshLoadedMessages = useCallback(async (targetVisibleCount = MESSAGE_PAGE_SIZE) => {
         if (!id) return;
@@ -210,44 +228,72 @@ export default function ThreadScreen() {
     });
 
     const sendMessage = async () => {
-        if (!id || !inputText.trim()) return;
+        if (!id || !inputText.trim() || isLoading || !!inFlightTurnIdRef.current) return;
 
         const userMessage = inputText.trim();
         const refreshTargetCount = Math.max(MESSAGE_PAGE_SIZE, loadedMessageCount + 4);
+        const turnId = createTurnId();
+        const turnStartedAt = Date.now();
+        let turnStage: string = 'start';
+        let userMessagePersisted = false;
+        let assistantMessagePersisted = false;
+        let activeProvider: 'local' | 'cloud' = 'local';
+
+        inFlightTurnIdRef.current = turnId;
         setInputText('');
         setTranscriptBuffer('');
         setIsLoading(true);
 
+        console.log('[ThreadTurn] start', {
+            turnId,
+            threadId: id,
+            userChars: userMessage.length
+        });
+
         try {
             if (isRecording) {
+                turnStage = 'stop_recording';
                 try {
                     await ExpoSpeechRecognitionModule.stop();
                 } catch (e: any) {
-                    console.error('Stop error:', e);
+                    console.error('[ThreadTurn] stop recording failed', { turnId, error: e?.message });
                 } finally {
                     setIsRecording(false);
                     setMicStatus('Stopped');
                 }
             }
 
+            turnStage = 'persist_user_message';
             await MessageRepo.create(id, 'user', userMessage);
+            userMessagePersisted = true;
             await refreshLoadedMessages(refreshTargetCount);
 
-            try {
-                await LLMService.init();
-                if (!llmReady) setLlmReady(true);
-            } catch (e) {
-                throw new Error('AI model not ready. Please check Settings.');
+            turnStage = 'resolve_provider';
+            activeProvider = await LLMService.resolveProviderForTurn();
+
+            turnStage = 'init_provider';
+            await LLMService.init(activeProvider);
+            if (!llmReady && isMountedRef.current) {
+                setLlmReady(true);
             }
 
-            const memoryContext = await MemoryService.buildTurnContext(id, userMessage);
-            const response = await LLMService.chat(memoryContext.chatMessages, { task: 'assistant' });
+            turnStage = 'build_memory_context';
+            const memoryContext = await MemoryService.buildTurnContext(id, userMessage, { turnId });
+
+            turnStage = 'generate_assistant_reply';
+            const response = await LLMService.chat(memoryContext.chatMessages, {
+                task: 'assistant',
+                provider: activeProvider,
+                requestId: turnId
+            });
             const assistantReply = response && response.trim() ? response.trim() : '...';
 
-            await MessageRepo.create(id, 'assistant', assistantReply);
-
+            turnStage = 'persist_assistant_reply';
+            await MessageRepo.create(id, 'assistant', assistantReply, { turnId, provider: activeProvider });
+            assistantMessagePersisted = true;
             await refreshLoadedMessages(refreshTargetCount);
 
+            turnStage = 'queue_post_processing';
             postProcessingQueueRef.current = postProcessingQueueRef.current
                 .catch(() => undefined)
                 .then(async () => {
@@ -255,9 +301,12 @@ export default function ThreadScreen() {
                         threadId: id,
                         spaceId: memoryContext.spaceId,
                         userMessage,
-                        assistantMessage: assistantReply
+                        assistantMessage: assistantReply,
+                        turnId,
+                        provider: activeProvider
                     });
 
+                    if (!isMountedRef.current) return;
                     if (
                         postProcessResult.executionReport.executedCount > 0 ||
                         postProcessResult.summary.updated
@@ -271,13 +320,54 @@ export default function ThreadScreen() {
                     }
                 })
                 .catch((error) => {
-                    console.warn('[ThreadScreen] post-processing queue failed', error);
+                    console.warn('[ThreadTurn] post-processing queue failed', {
+                        turnId,
+                        threadId: id,
+                        error: error?.message
+                    });
                 });
+
+            console.log('[ThreadTurn] completed', {
+                turnId,
+                threadId: id,
+                provider: activeProvider,
+                elapsedMs: Date.now() - turnStartedAt
+            });
         } catch (error: any) {
-            console.error('Error sending message:', error);
-            Alert.alert('Error', error.message || 'Failed to get AI response.');
+            console.error('[ThreadTurn] failed', {
+                turnId,
+                threadId: id,
+                provider: activeProvider,
+                stage: turnStage,
+                message: error?.message
+            });
+
+            if (userMessagePersisted && !assistantMessagePersisted) {
+                try {
+                    await MessageRepo.create(
+                        id,
+                        'assistant',
+                        'I ran into a temporary issue while generating a reply. Please try again.',
+                        { turnId, fallback: true, stage: turnStage }
+                    );
+                    await refreshLoadedMessages(refreshTargetCount);
+                    assistantMessagePersisted = true;
+                } catch (fallbackError: any) {
+                    console.error('[ThreadTurn] fallback assistant message failed', {
+                        turnId,
+                        message: fallbackError?.message
+                    });
+                }
+            }
+
+            Alert.alert('Reply Unavailable', getUserFacingTurnError());
         } finally {
-            setIsLoading(false);
+            if (inFlightTurnIdRef.current === turnId) {
+                inFlightTurnIdRef.current = null;
+            }
+            if (isMountedRef.current) {
+                setIsLoading(false);
+            }
         }
     };
 
