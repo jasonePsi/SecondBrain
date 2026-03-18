@@ -1,163 +1,123 @@
-import { initLlama, LlamaContext } from 'llama.rn';
-import { ModelManager } from './ModelManager';
+import { AIConfig } from '../constants/AIConfig';
+import { AppSettingsRepo } from '../repositories/app_settings_repo';
+import { sanitizeAssistantResponse } from './ai/sanitize';
+import type {
+    AIProviderStatus,
+    AIProviderType,
+    AIRequestOptions,
+    ChatMessage
+} from './ai/types';
+import { resolveProviderFromSetting } from './ai/provider_selection';
+import { LocalLlamaProvider } from './providers/LocalLlamaProvider';
+import { OpenAIProxyProvider } from './providers/OpenAIProxyProvider';
 
-let context: LlamaContext | null = null;
-let activeModelId: string | null = null;
+const ACTIVE_AI_PROVIDER_KEY = 'active_ai_provider';
 
-export type ChatMessage = {
-    role: 'system' | 'user' | 'assistant';
-    content: string;
+const localProvider = new LocalLlamaProvider();
+const cloudProvider = new OpenAIProxyProvider();
+
+const providerMap = {
+    local: localProvider,
+    cloud: cloudProvider
+} as const;
+
+const getStoredProvider = async (): Promise<AIProviderType> => {
+    try {
+        const stored = await AppSettingsRepo.getString(ACTIVE_AI_PROVIDER_KEY);
+        return resolveProviderFromSetting(stored, AIConfig.defaultProvider);
+    } catch (error) {
+        console.warn('[LLMService] Failed to read active provider setting, using default', error);
+    }
+    return AIConfig.defaultProvider;
 };
 
-// Simple JSON grammar (GBNF) constructed with standard strings to avoid template literal issues in tooling
-const JSON_GRAMMAR =
-    "root   ::= object\\n" +
-    "value  ::= object | array | string | number | (\"true\" | \"false\" | \"null\") ws\\n" +
-    "object ::= \"{\" ws (string \":\" ws value (\",\" ws string \":\" ws value)*)? \"}\" ws\\n" +
-    "array  ::= \"[\" ws (value (\",\" ws value)*)? \"]\" ws\\n" +
-    "string ::= \"\\\"\" ([^\"\\\\] | \"\\\\\" ([\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* \"\\\"\" ws\\n" +
-    "number ::= (\"-\"? ([0-9]+) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?) ws\\n" +
-    "ws ::= ([ \\t\\n]*)\\n";
+const persistProvider = async (provider: AIProviderType): Promise<void> => {
+    await AppSettingsRepo.setString(ACTIVE_AI_PROVIDER_KEY, provider);
+};
 
-export const sanitizeAssistantResponse = (text: string): string => {
-    let cleaned = text || '';
-    const tokenRegex = /<\|[^>]+?\|>/g;
-    const firstTokenIndex = cleaned.search(tokenRegex);
+const getActiveProviderImpl = async () => {
+    const activeProvider = await getStoredProvider();
+    return providerMap[activeProvider];
+};
 
-    if (firstTokenIndex >= 0) {
-        cleaned = cleaned.slice(0, firstTokenIndex);
+const normalizeError = (error: unknown, fallback: string): Error => {
+    if (error instanceof Error) return error;
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return new Error(error.trim());
     }
-
-    cleaned = cleaned.replace(tokenRegex, '');
-
-    const lines = cleaned.split('\n');
-    const filtered = lines.filter((line) => {
-        const trimmed = line.trim();
-        if (!trimmed) return true;
-        if (/^-\s*\[?ask\]?:/i.test(trimmed)) return false;
-        if (/^-\s*response:/i.test(trimmed)) return false;
-        if (/^\[?ask\]?:/i.test(trimmed)) return false;
-        if (/^response:/i.test(trimmed)) return false;
-        return true;
-    });
-
-    cleaned = filtered.join('\n').replace(/\n{3,}/g, '\n\n');
-    return cleaned.trim();
+    return new Error(fallback);
 };
 
 export const LLMService = {
-    init: async () => {
-        // Get active model from database
-        const activeModel = await ModelManager.getActiveModel();
-        if (!activeModel) {
-            throw new Error('No model installed. Please download a model in Settings.');
-        }
-
-        if (context && activeModelId === activeModel.model_id) {
-            return context;
-        }
-
-        if (context) {
-            await context.release();
-            context = null;
-        }
-
-        activeModelId = activeModel.model_id;
-
-        // Verify model file exists
-        const isInstalled = await ModelManager.isInstalled(activeModel.model_id);
-        if (!isInstalled) {
-            throw new Error('Active model file not found. Please re-download in Settings.');
-        }
-
-        const path = activeModel.path;
-        console.log(`Initializing LLM with model: ${activeModel.model_id} at ${path}`);
-
-        const nCtx = [
-            'phi-3-mini',
-            'phi-3.5-mini',
-            'llama-3.2-3b',
-            'llama-3.1-8b',
-            'qwen2.5-3b',
-            'qwen2.5-7b',
-            'mistral-7b',
-            'gemma-2-2b',
-            'gemma-2-9b'
-        ].includes(activeModel.model_id)
-            ? 4096
-            : 2048;
-
-        context = await initLlama({
-            model: path,
-            use_mlock: true,
-            n_ctx: nCtx,
-            n_gpu_layers: 0,
-        });
-
-        return context;
+    init: async (): Promise<void> => {
+        const provider = await getActiveProviderImpl();
+        await provider.init();
     },
 
-    release: async () => {
-        if (context) {
-            await context.release();
-            context = null;
-        }
-        activeModelId = null;
+    release: async (): Promise<void> => {
+        await Promise.all([
+            localProvider.release(),
+            cloudProvider.release()
+        ]);
     },
 
-    process: async (prompt: string) => {
-        if (!context) throw new Error('Context not initialized');
-
-        const response = await context.completion({
-            prompt,
-            n_predict: 512,
-            temperature: 0.2,
-            grammar: JSON_GRAMMAR,
-            stop: ['</s>', 'Assistant:', 'User:'],
-        });
-
-        return response.text;
-    },
-
-    // Chat method for natural language responses (no grammar constraint)
-    chat: async (messages: ChatMessage[]) => {
-        if (!context) throw new Error('Context not initialized');
-
-        if (!activeModelId) {
-            const activeModel = await ModelManager.getActiveModel();
-            activeModelId = activeModel?.model_id || null;
-        }
-
-        const normalizedMessages = messages.map((message) => {
-            if (message.role !== 'assistant') return message;
-            return {
-                ...message,
-                content: sanitizeAssistantResponse(message.content)
-            };
-        });
-
+    chat: async (
+        messages: ChatMessage[],
+        options?: AIRequestOptions
+    ): Promise<string> => {
+        const provider = await getActiveProviderImpl();
         try {
-            await context.clearCache(false);
+            return await provider.chat(messages, options);
         } catch (error) {
-            console.warn('Failed to clear cache:', error);
+            throw normalizeError(error, 'Failed to generate assistant response');
+        }
+    },
+
+    process: async (
+        prompt: string,
+        options?: AIRequestOptions
+    ): Promise<string> => {
+        const provider = await getActiveProviderImpl();
+        try {
+            return await provider.process(prompt, options);
+        } catch (error) {
+            throw normalizeError(error, 'Failed to process structured output');
+        }
+    },
+
+    getActiveProvider: async (): Promise<AIProviderType> => {
+        return await getStoredProvider();
+    },
+
+    setActiveProvider: async (provider: AIProviderType): Promise<void> => {
+        const targetProvider = providerMap[provider];
+        if (provider === 'cloud') {
+            const status = await targetProvider.getStatus();
+            if (!status.available) {
+                throw new Error(status.reason || 'Cloud provider is unavailable');
+            }
         }
 
-        const response = await context.completion({
-            messages: normalizedMessages.map((message) => ({
-                role: message.role,
-                content: message.content
-            })),
-            add_generation_prompt: true,
-            n_predict: 256,
-            temperature: 0.2,
-            top_k: 40,
-            top_p: 0.9,
-            min_p: 0.05,
-            penalty_repeat: 1.1,
-            penalty_last_n: 128,
-            seed: 42
-        });
+        await persistProvider(provider);
+        await LLMService.release();
+    },
 
-        return sanitizeAssistantResponse(response.text);
+    getProviderStatus: async (provider: AIProviderType): Promise<AIProviderStatus> => {
+        return await providerMap[provider].getStatus();
+    },
+
+    listProviderStatuses: async (): Promise<AIProviderStatus[]> => {
+        return await Promise.all([
+            localProvider.getStatus(),
+            cloudProvider.getStatus()
+        ]);
     }
 };
+
+export { sanitizeAssistantResponse };
+export type {
+    AIProviderStatus,
+    AIProviderType,
+    AIRequestOptions,
+    ChatMessage
+} from './ai/types';

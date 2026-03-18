@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { SpaceRepo, Space } from '../../src/repositories/space_repo';
@@ -9,14 +9,24 @@ import { Ionicons } from '@expo/vector-icons';
 
 export default function SpacesScreen() {
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Space | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const router = useRouter();
 
   const loadSpaces = useCallback(async () => {
-    const data = await SpaceRepo.getAll();
-    setSpaces(data);
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await SpaceRepo.getAll();
+      setSpaces(data);
+    } catch (err: any) {
+      setError(err?.message || 'Could not load spaces.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -161,14 +171,24 @@ export default function SpacesScreen() {
       <FlashList
         data={spaces}
         renderItem={renderItem}
-        estimatedItemSize={60}
         extraData={isEditing}
-        ListEmptyComponent={<Text style={styles.empty}>No spaces yet.</Text>}
+        ListEmptyComponent={(
+          loading ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.empty}>Loading spaces…</Text>
+            </View>
+          ) : (
+            <View style={styles.centerState}>
+              <Text style={styles.empty}>No spaces yet. Create one to get started.</Text>
+            </View>
+          )
+        )}
+        ListHeaderComponent={error ? (
+          <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+        ) : null}
       />
       {!isEditing && <CaptureFAB onPress={() => router.push('/space/new')} />}
-      <Text style={{ position: 'absolute', bottom: 80, left: 10, fontSize: 10, color: '#888' }}>
-        Build: Feb6-1550
-      </Text>
 
       <Modal
         transparent
@@ -250,6 +270,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
     color: Colors.secondaryText
+  },
+  centerState: {
+    marginTop: 40,
+    alignItems: 'center'
+  },
+  inlineError: {
+    color: Colors.notification,
+    fontSize: 12,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4
   },
   modalOverlay: {
     flex: 1,

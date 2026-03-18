@@ -2,50 +2,228 @@ import { ActionService } from './ActionService';
 import { FactRepo } from '../repositories/fact_repo';
 import { SpaceRepo } from '../repositories/space_repo';
 import { ThreadRepo } from '../repositories/thread_repo';
+import { FeedRepo } from '../repositories/feed_repo';
+
+type SupportedScope = 'thread' | 'space' | 'global';
+
+interface OpsExecutionLog {
+    op: string;
+    status: 'executed' | 'skipped' | 'failed';
+    detail: string;
+}
+
+export interface OpsExecutionReport {
+    executedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    logs: OpsExecutionLog[];
+}
+
+const parseTimestamp = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+};
+
+const normalizeScope = (
+    requestedScope: unknown,
+    currentSpaceId?: string,
+    currentThreadId?: string
+): { scopeType: SupportedScope; scopeId: string | null } => {
+    const validRequestedScope = (
+        requestedScope === 'thread' || requestedScope === 'space' || requestedScope === 'global'
+    )
+        ? requestedScope
+        : null;
+
+    const scopeType: SupportedScope = validRequestedScope
+        ? validRequestedScope
+        : (currentThreadId ? 'thread' : currentSpaceId ? 'space' : 'global');
+
+    if (scopeType === 'thread') {
+        return { scopeType, scopeId: currentThreadId || null };
+    }
+    if (scopeType === 'space') {
+        return { scopeType, scopeId: currentSpaceId || null };
+    }
+    return { scopeType, scopeId: null };
+};
+
+const resolveFeedSpaceIdForScope = async (
+    scopeType: SupportedScope,
+    scopeId: string | null,
+    currentSpaceId?: string
+): Promise<string | null> => {
+    if (currentSpaceId) return currentSpaceId;
+    if (scopeType === 'space') return scopeId;
+    if (scopeType === 'thread' && scopeId) {
+        const thread = await ThreadRepo.get(scopeId);
+        return thread?.space_id || null;
+    }
+    return null;
+};
 
 export const OpsExecutor = {
-    execute: async (jsonResult: any, currentSpaceId?: string, currentThreadId?: string) => {
-        // Schema: { assistant_reply, ops: [] }
-        const ops = jsonResult.ops || [];
+    execute: async (
+        jsonResult: any,
+        currentSpaceId?: string,
+        currentThreadId?: string
+    ): Promise<OpsExecutionReport> => {
+        const ops = Array.isArray(jsonResult)
+            ? jsonResult
+            : (Array.isArray(jsonResult?.ops) ? jsonResult.ops : []);
+        const logs: OpsExecutionLog[] = [];
+        let executedCount = 0;
+        let skippedCount = 0;
+        let failedCount = 0;
 
         for (const opItem of ops) {
-            try {
-                const { op, data } = opItem;
+            const op = opItem?.op;
+            const data = opItem?.data || {};
 
+            try {
                 switch (op) {
-                    case 'CREATE_ACTION':
-                        // data: { type, payload, schedule, ... }
-                        await ActionService.createReminder(
-                            currentThreadId ? 'thread' : 'space',
-                            currentThreadId || currentSpaceId || null,
-                            data.payload?.text || JSON.stringify(data.payload),
-                            data.schedule?.timestamp || Date.now() + 60000, // fallback 1m
-                            currentSpaceId
-                        );
+                    case 'CREATE_ACTION': {
+                        const payloadText = typeof data?.payload?.text === 'string'
+                            ? data.payload.text.trim()
+                            : '';
+                        const text = payloadText || 'Reminder';
+                        const timestamp = parseTimestamp(data?.schedule?.timestamp);
+
+                        if (!timestamp) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'Missing or invalid schedule timestamp' });
+                            break;
+                        }
+
+                        const { scopeType, scopeId } = normalizeScope(data?.scope, currentSpaceId, currentThreadId);
+                        await ActionService.createReminder(scopeType, scopeId, text, timestamp, currentSpaceId);
+                        executedCount += 1;
+                        logs.push({ op, status: 'executed', detail: `Created ${scopeType} reminder` });
                         break;
-                    case 'UPSERT_FACT':
-                        // data: { key, value, ... }
-                        await FactRepo.upsert(
-                            'thread',
-                            currentThreadId || null,
-                            data.key,
+                    }
+
+                    case 'UPSERT_FACT': {
+                        if (typeof data?.key !== 'string' || data.key.trim().length === 0) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'Missing fact key' });
+                            break;
+                        }
+                        if (data.value === undefined) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'Missing fact value' });
+                            break;
+                        }
+
+                        const { scopeType, scopeId } = normalizeScope(data?.scope, currentSpaceId, currentThreadId);
+                        const result = await FactRepo.appendIfChanged(
+                            scopeType,
+                            scopeId,
+                            data.key.trim(),
                             data.value,
-                            data.unit
+                            typeof data?.unit === 'string' ? data.unit : undefined
                         );
+                        if (result.inserted) {
+                            const feedSpaceId = await resolveFeedSpaceIdForScope(scopeType, scopeId, currentSpaceId);
+                            await FeedRepo.create(feedSpaceId, 'fact', result.factId);
+                        }
+                        executedCount += 1;
+                        logs.push({
+                            op,
+                            status: 'executed',
+                            detail: result.inserted ? 'Inserted fact history row' : 'Fact unchanged; reused latest row'
+                        });
                         break;
-                    // Add other ops...
-                    case 'UPSERT_SPACE':
-                        if (data.name) await SpaceRepo.create(data.name);
+                    }
+
+                    case 'UPDATE_THREAD': {
+                        if (!currentThreadId) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'No active thread context' });
+                            break;
+                        }
+
+                        const updates: {
+                            title?: string;
+                            summary_text?: string | null;
+                            summary_updated_at?: number | null;
+                        } = {};
+
+                        if (typeof data?.title === 'string' && data.title.trim().length >= 3) {
+                            updates.title = data.title.trim().slice(0, 80);
+                        }
+                        if (typeof data?.summary === 'string' && data.summary.trim().length >= 12) {
+                            updates.summary_text = data.summary.trim().slice(0, 1000);
+                            updates.summary_updated_at = Date.now();
+                        }
+
+                        if (Object.keys(updates).length === 0) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'No valid thread update fields' });
+                            break;
+                        }
+
+                        await ThreadRepo.update(currentThreadId, updates);
+                        const feedSpaceId = currentSpaceId || (await ThreadRepo.get(currentThreadId))?.space_id || null;
+                        await FeedRepo.create(feedSpaceId, 'thread_updated', currentThreadId);
+                        executedCount += 1;
+                        logs.push({ op, status: 'executed', detail: 'Updated thread metadata' });
                         break;
-                    case 'UPSERT_THREAD':
-                        if (data.title && currentSpaceId) await ThreadRepo.create(currentSpaceId, data.title);
+                    }
+
+                    case 'UPSERT_SPACE': {
+                        if (!data?.name || typeof data.name !== 'string' || data.name.trim().length === 0) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'Missing space name' });
+                            break;
+                        }
+                        const createdSpaceId = await SpaceRepo.create(data.name.trim());
+                        await FeedRepo.create(createdSpaceId, 'space_created', createdSpaceId);
+                        executedCount += 1;
+                        logs.push({ op, status: 'executed', detail: 'Created space' });
+                        break;
+                    }
+
+                    case 'UPSERT_THREAD': {
+                        if (!currentSpaceId || typeof data?.title !== 'string' || data.title.trim().length === 0) {
+                            skippedCount += 1;
+                            logs.push({ op, status: 'skipped', detail: 'Missing space context or title' });
+                            break;
+                        }
+                        const createdThreadId = await ThreadRepo.create(currentSpaceId, data.title.trim());
+                        await FeedRepo.create(currentSpaceId, 'thread_created', createdThreadId);
+                        executedCount += 1;
+                        logs.push({ op, status: 'executed', detail: 'Created thread' });
+                        break;
+                    }
+
+                    default:
+                        skippedCount += 1;
+                        logs.push({ op: op || 'UNKNOWN', status: 'skipped', detail: 'Unsupported operation' });
                         break;
                 }
-            } catch (e) {
-                console.error('Failed to execute op', opItem, e);
+            } catch (error: any) {
+                failedCount += 1;
+                logs.push({
+                    op: op || 'UNKNOWN',
+                    status: 'failed',
+                    detail: error?.message || 'Execution failed'
+                });
+                console.error('[OpsExecutor] failed op', { opItem, error });
             }
         }
 
-        return jsonResult.assistant_reply;
+        const report: OpsExecutionReport = {
+            executedCount,
+            skippedCount,
+            failedCount,
+            logs
+        };
+
+        console.log('[OpsExecutor] execution report', report);
+        return report;
     }
 };

@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Colors } from '../../src/constants/Colors';
 import { getAllModels, ModelConfig } from '../../src/constants/ModelRegistry';
+import { ModelManager } from '../../src/services/ModelManager';
 
 export default function ModelSelectionScreen() {
     const router = useRouter();
     const [models, setModels] = useState<ModelConfig[]>([]);
     const [selectedModel, setSelectedModel] = useState<string | null>(null);
     const [availableStorage, setAvailableStorage] = useState<number>(0);
+    const [installedModelIds, setInstalledModelIds] = useState<Set<string>>(new Set());
+    const [activeModelId, setActiveModelId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
         loadData();
@@ -25,8 +29,19 @@ export default function ModelSelectionScreen() {
             const freeDisk = await FileSystem.getFreeDiskStorageAsync();
             setAvailableStorage(freeDisk);
 
-            // Auto-select recommended model if low storage
-            if (freeDisk < 5_000_000_000) {
+            const installedModels = await ModelManager.getInstalledModels();
+            const activeModel = await ModelManager.getActiveModel();
+            const installedIds = new Set(installedModels.map((model) => model.model_id));
+
+            setInstalledModelIds(installedIds);
+            setActiveModelId(activeModel?.model_id || null);
+
+            if (activeModel?.model_id) {
+                setSelectedModel(activeModel.model_id);
+            } else if (installedModels.length > 0) {
+                setSelectedModel(installedModels[0].model_id);
+            } else if (freeDisk < 5_000_000_000) {
+                // Auto-select lighter model if storage is tight.
                 setSelectedModel('llama-3.2-1b');
             }
         } catch (error) {
@@ -40,12 +55,39 @@ export default function ModelSelectionScreen() {
         return (bytes / 1_000_000_000).toFixed(1) + ' GB';
     };
 
-    const handleContinue = () => {
+    const formatBatteryImpact = (impact: ModelConfig['batteryImpact']) => {
+        if (impact === 'low') return '🔋 Low';
+        if (impact === 'medium') return '🔋 Medium';
+        return '🔋 High';
+    };
+
+    const getModelStatus = (modelId: string): 'active' | 'installed' | 'available' => {
+        if (activeModelId === modelId) return 'active';
+        if (installedModelIds.has(modelId)) return 'installed';
+        return 'available';
+    };
+
+    const handleContinue = async () => {
         if (!selectedModel) return;
-        router.push({
-            pathname: '/onboarding/download',
-            params: { modelId: selectedModel }
-        });
+
+        const isInstalled = installedModelIds.has(selectedModel);
+        try {
+            setSubmitting(true);
+            if (isInstalled) {
+                await ModelManager.setActiveModel(selectedModel);
+                router.replace('/');
+                return;
+            }
+
+            router.push({
+                pathname: '/onboarding/download',
+                params: { modelId: selectedModel }
+            });
+        } catch (error: any) {
+            Alert.alert('Model Setup Failed', error?.message || 'Could not activate selected model.');
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     if (loading) {
@@ -90,6 +132,18 @@ export default function ModelSelectionScreen() {
                                 </Text>
                             </View>
                         </View>
+                        <View style={styles.statusRow}>
+                            <View style={[
+                                styles.statusBadge,
+                                getModelStatus(model.id) === 'active' ? styles.statusActive :
+                                    getModelStatus(model.id) === 'installed' ? styles.statusInstalled : styles.statusAvailable
+                            ]}>
+                                <Text style={styles.statusBadgeText}>
+                                    {getModelStatus(model.id) === 'active' ? 'Active' :
+                                        getModelStatus(model.id) === 'installed' ? 'Installed' : 'Available'}
+                                </Text>
+                            </View>
+                        </View>
                         <Text style={styles.modelDescription}>{model.description}</Text>
                     </View>
 
@@ -129,7 +183,7 @@ export default function ModelSelectionScreen() {
                         <View style={styles.statRow}>
                             <Text style={styles.statLabel}>Battery:</Text>
                             <Text style={styles.statValue}>
-                                {model.batteryImpact === 'low' ? '🔋 Low' : '🔋 Medium'}
+                                {formatBatteryImpact(model.batteryImpact)}
                             </Text>
                         </View>
                     </View>
@@ -147,12 +201,16 @@ export default function ModelSelectionScreen() {
             <TouchableOpacity
                 style={[
                     styles.continueButton,
-                    !selectedModel && styles.continueButtonDisabled
+                    (!selectedModel || submitting) && styles.continueButtonDisabled
                 ]}
                 onPress={handleContinue}
-                disabled={!selectedModel}
+                disabled={!selectedModel || submitting}
             >
-                <Text style={styles.continueButtonText}>Download & Continue</Text>
+                <Text style={styles.continueButtonText}>
+                    {selectedModel && installedModelIds.has(selectedModel)
+                        ? 'Use Selected Model'
+                        : 'Download & Continue'}
+                </Text>
             </TouchableOpacity>
         </ScrollView>
     );
@@ -236,6 +294,29 @@ const styles = StyleSheet.create({
     modelDescription: {
         fontSize: 14,
         color: Colors.textSecondary
+    },
+    statusRow: {
+        flexDirection: 'row',
+        marginBottom: 8
+    },
+    statusBadge: {
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 999
+    },
+    statusAvailable: {
+        backgroundColor: '#E5E7EB'
+    },
+    statusInstalled: {
+        backgroundColor: '#DBEAFE'
+    },
+    statusActive: {
+        backgroundColor: '#DCFCE7'
+    },
+    statusBadgeText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#1F2937'
     },
     modelStats: {
         gap: 8

@@ -9,6 +9,35 @@ export interface ModelSetting {
     is_active: boolean;
 }
 
+const upsertModelRecord = async (
+    modelId: string,
+    path: string,
+    sizeBytes: number
+): Promise<void> => {
+    const now = Date.now();
+    const id = Math.random().toString(36).substring(2, 15);
+
+    await db.transaction(async (tx) => {
+        const existing = await tx.execute(
+            'SELECT id FROM model_settings WHERE model_id = ?',
+            [modelId]
+        );
+
+        if (existing.rows && existing.rows.length > 0) {
+            await tx.execute(
+                'UPDATE model_settings SET path = ?, size_bytes = ?, installed_at = ? WHERE model_id = ?',
+                [path, sizeBytes, now, modelId]
+            );
+            return;
+        }
+
+        await tx.execute(
+            'INSERT INTO model_settings (id, model_id, path, size_bytes, installed_at, is_active) VALUES (?, ?, ?, ?, ?, 0)',
+            [id, modelId, path, sizeBytes, now]
+        );
+    });
+};
+
 export const ModelRepo = {
     getActiveModel: async (): Promise<ModelSetting | null> => {
         const result = await db.execute(
@@ -29,34 +58,37 @@ export const ModelRepo = {
         return null;
     },
 
-    setActiveModel: async (modelId: string, path: string, sizeBytes: number): Promise<void> => {
-        const now = Date.now();
-        const id = Math.random().toString(36).substring(2, 15);
+    installModel: async (modelId: string, path: string, sizeBytes: number): Promise<void> => {
+        await upsertModelRecord(modelId, path, sizeBytes);
+    },
 
+    activateModel: async (modelId: string): Promise<void> => {
         await db.transaction(async (tx) => {
-            // Deactivate all models
-            await tx.execute('UPDATE model_settings SET is_active = 0');
-
-            // Check if model already exists
             const existing = await tx.execute(
                 'SELECT id FROM model_settings WHERE model_id = ?',
                 [modelId]
             );
 
-            if (existing.rows && existing.rows.length > 0) {
-                // Update existing
-                await tx.execute(
-                    'UPDATE model_settings SET is_active = 1, path = ?, size_bytes = ? WHERE model_id = ?',
-                    [path, sizeBytes, modelId]
-                );
-            } else {
-                // Insert new
-                await tx.execute(
-                    'INSERT INTO model_settings (id, model_id, path, size_bytes, installed_at, is_active) VALUES (?, ?, ?, ?, ?, 1)',
-                    [id, modelId, path, sizeBytes, now]
-                );
+            if (!existing.rows || existing.rows.length === 0) {
+                throw new Error(`Model ${modelId} is not installed`);
             }
+
+            await tx.execute('UPDATE model_settings SET is_active = 0');
+            await tx.execute(
+                'UPDATE model_settings SET is_active = 1 WHERE model_id = ?',
+                [modelId]
+            );
         });
+    },
+
+    clearActiveModel: async (): Promise<void> => {
+        await db.execute('UPDATE model_settings SET is_active = 0');
+    },
+
+    // Backward compatible behavior for existing call sites.
+    setActiveModel: async (modelId: string, path: string, sizeBytes: number): Promise<void> => {
+        await upsertModelRecord(modelId, path, sizeBytes);
+        await ModelRepo.activateModel(modelId);
     },
 
     getInstalledModels: async (): Promise<ModelSetting[]> => {

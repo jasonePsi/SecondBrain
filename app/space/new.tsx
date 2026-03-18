@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter, Stack } from 'expo-router';
 import { SpaceRepo } from '../../src/repositories/space_repo';
+import { FeedRepo } from '../../src/repositories/feed_repo';
 import { Colors } from '../../src/constants/Colors';
 
 export default function NewSpaceScreen() {
@@ -13,7 +14,8 @@ export default function NewSpaceScreen() {
         if (!name.trim()) return;
         setIsSubmitting(true);
         try {
-            await SpaceRepo.create(name.trim());
+            const id = await SpaceRepo.create(name.trim());
+            await FeedRepo.create(id, 'space_created', id);
             router.back();
         } catch (e) {
             console.error(e);

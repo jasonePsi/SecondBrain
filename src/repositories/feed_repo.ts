@@ -10,6 +10,15 @@ export interface FeedItem {
     created_at: number;
 }
 
+const normalizeFeedItemRow = (row: any): FeedItem => ({
+    id: row.id,
+    space_id: row.space_id,
+    type: row.type,
+    ref_id: row.ref_id,
+    scheduled_for: row.scheduled_for,
+    created_at: row.created_at
+});
+
 export const FeedRepo = {
     create: async (spaceId: string | null, type: string, refId: string, scheduledFor?: number) => {
         const id = generateId();
@@ -32,6 +41,6 @@ export const FeedRepo = {
         params.push(limit);
 
         const res = await db.execute(sql, params);
-        return (res.rows as FeedItem[]) || [];
+        return ((res.rows as any[]) || []).map(normalizeFeedItemRow);
     }
 };

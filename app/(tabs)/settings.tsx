@@ -1,13 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
 import { ModelManager } from '../../src/services/ModelManager';
 import { LLMService } from '../../src/services/LLMService';
+import type { AIProviderStatus, AIProviderType } from '../../src/services/LLMService';
 import { getAllModels, getModelById, ModelConfig } from '../../src/constants/ModelRegistry';
 import { ModelSetting } from '../../src/repositories/model_repo';
 
 export default function SettingsScreen() {
+    const [activeProvider, setActiveProvider] = useState<AIProviderType>('local');
+    const [providerStatuses, setProviderStatuses] = useState<AIProviderStatus[]>([]);
+    const [switchingProvider, setSwitchingProvider] = useState<AIProviderType | null>(null);
+
     const [activeModel, setActiveModel] = useState<ModelSetting | null>(null);
     const [installedModels, setInstalledModels] = useState<ModelSetting[]>([]);
     const [availableModels, setAvailableModels] = useState<ModelConfig[]>([]);
@@ -24,10 +29,21 @@ export default function SettingsScreen() {
     const loadData = async () => {
         try {
             setLoading(true);
-            const active = await ModelManager.getActiveModel();
-            const installed = await ModelManager.getInstalledModels();
-            const all = getAllModels();
+            const [
+                selectedProvider,
+                statuses,
+                active,
+                installed
+            ] = await Promise.all([
+                LLMService.getActiveProvider(),
+                LLMService.listProviderStatuses(),
+                ModelManager.getActiveModel(),
+                ModelManager.getInstalledModels()
+            ]);
 
+            const all = getAllModels();
+            setActiveProvider(selectedProvider);
+            setProviderStatuses(statuses);
             setActiveModel(active);
             setInstalledModels(installed);
             setAvailableModels(all);
@@ -38,6 +54,28 @@ export default function SettingsScreen() {
         }
     };
 
+    const getProviderStatus = (provider: AIProviderType): AIProviderStatus | undefined => {
+        return providerStatuses.find((item) => item.provider === provider);
+    };
+
+    const handleSwitchProvider = async (provider: AIProviderType) => {
+        try {
+            setSwitchingProvider(provider);
+            await LLMService.setActiveProvider(provider);
+            Alert.alert(
+                'Provider Updated',
+                provider === 'cloud'
+                    ? 'Cloud provider is now active.'
+                    : 'Local provider is now active.'
+            );
+            await loadData();
+        } catch (error: any) {
+            Alert.alert('Provider Unavailable', error.message || 'Could not switch provider.');
+        } finally {
+            setSwitchingProvider(null);
+        }
+    };
+
     const handleDownloadModel = async (modelId: string) => {
         try {
             setDownloading(modelId);
@@ -45,9 +83,9 @@ export default function SettingsScreen() {
 
             await ModelManager.downloadModel(modelId, (progress) => {
                 setDownloadProgress(progress);
-            });
+            }, { activate: false });
 
-            Alert.alert('Success', 'Model downloaded successfully!');
+            Alert.alert('Model Installed', 'Model download complete. Select "Use This Model" to activate it.');
             await loadData();
         } catch (error: any) {
             Alert.alert('Download Failed', error.message || 'Failed to download model');
@@ -59,29 +97,15 @@ export default function SettingsScreen() {
 
     const handleSwitchModel = async (modelId: string) => {
         try {
-            // Check if model is installed
             const installed = await ModelManager.isInstalled(modelId);
-
             if (!installed) {
-                // Ask user if they want to download
-                Alert.alert(
-                    'Model Not Installed',
-                    'This model needs to be downloaded first. Download now?',
-                    [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                            text: 'Download',
-                            onPress: () => handleDownloadModel(modelId)
-                        }
-                    ]
-                );
+                Alert.alert('Model Not Installed', 'Install this model before activating it.');
                 return;
             }
 
-            // Switch to model
             await ModelManager.setActiveModel(modelId);
             await LLMService.release();
-            Alert.alert('Success', 'Model switched successfully!');
+            Alert.alert('Model Active', 'This model is now active.');
             await loadData();
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Failed to switch model');
@@ -101,8 +125,18 @@ export default function SettingsScreen() {
                     style: 'destructive',
                     onPress: async () => {
                         try {
-                            await ModelManager.deleteModel(modelId);
-                            Alert.alert('Success', 'Model deleted successfully');
+                            const result = await ModelManager.deleteModel(modelId);
+                            await LLMService.release();
+
+                            if (result.deletedWasActive && result.fallbackActiveModelId) {
+                                const fallbackName = getModelById(result.fallbackActiveModelId)?.name || result.fallbackActiveModelId;
+                                Alert.alert('Model Deleted', `${fallbackName} is now active.`);
+                            } else if (result.deletedWasActive) {
+                                Alert.alert('Model Deleted', 'No installed models remain. Install and activate a model to continue chatting.');
+                            } else {
+                                Alert.alert('Model Deleted', 'Model removed from this device.');
+                            }
+
                             await loadData();
                         } catch (error: any) {
                             Alert.alert('Error', error.message || 'Failed to delete model');
@@ -125,6 +159,23 @@ export default function SettingsScreen() {
         return installedModels.some(m => m.model_id === modelId);
     };
 
+    const getModelStatus = (
+        modelId: string,
+        isDownloading: boolean
+    ): 'available' | 'downloading' | 'installed' | 'active' => {
+        if (isDownloading) return 'downloading';
+        if (activeModel?.model_id === modelId) return 'active';
+        if (isModelInstalled(modelId)) return 'installed';
+        return 'available';
+    };
+
+    const getStatusLabel = (status: ReturnType<typeof getModelStatus>): string => {
+        if (status === 'active') return 'Active';
+        if (status === 'installed') return 'Installed';
+        if (status === 'downloading') return 'Downloading';
+        return 'Available';
+    };
+
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
@@ -136,6 +187,69 @@ export default function SettingsScreen() {
     return (
         <ScrollView style={styles.container}>
             <Text style={styles.header}>Settings</Text>
+
+            <View style={styles.section}>
+                <Text style={styles.sectionHeader}>AI Provider</Text>
+                {[
+                    {
+                        id: 'local' as AIProviderType,
+                        name: 'Local (On-device)',
+                        description: 'Runs fully offline with your installed GGUF model.'
+                    },
+                    {
+                        id: 'cloud' as AIProviderType,
+                        name: 'OpenAI Cloud (Proxy)',
+                        description: 'Routes requests through your backend proxy (no API key in app).'
+                    }
+                ].map((option) => {
+                    const status = getProviderStatus(option.id);
+                    const isActive = activeProvider === option.id;
+                    const isUnavailable = option.id === 'cloud' && !status?.available;
+                    const disabled = !!switchingProvider || isUnavailable;
+
+                    return (
+                        <View key={option.id} style={styles.providerCard}>
+                            <View style={styles.providerHeader}>
+                                <Text style={styles.providerName}>{option.name}</Text>
+                                <View style={[
+                                    styles.providerBadge,
+                                    isActive ? styles.providerBadgeActive : (
+                                        status?.available
+                                            ? styles.providerBadgeAvailable
+                                            : styles.providerBadgeUnavailable
+                                    )
+                                ]}>
+                                    <Text style={styles.providerBadgeText}>
+                                        {isActive ? 'Selected' : status?.available ? 'Available' : 'Unavailable'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <Text style={styles.providerDescription}>{option.description}</Text>
+                            {!!status?.reason && (
+                                <Text style={styles.providerReason}>{status.reason}</Text>
+                            )}
+
+                            {!isActive && (
+                                <TouchableOpacity
+                                    style={[
+                                        styles.providerSwitchButton,
+                                        disabled && styles.providerSwitchButtonDisabled
+                                    ]}
+                                    onPress={() => handleSwitchProvider(option.id)}
+                                    disabled={disabled}
+                                >
+                                    {switchingProvider === option.id ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <Text style={styles.providerSwitchButtonText}>Use Provider</Text>
+                                    )}
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    );
+                })}
+            </View>
 
             {/* Active Model Section */}
             <View style={styles.section}>
@@ -150,7 +264,17 @@ export default function SettingsScreen() {
                         </Text>
                     </View>
                 ) : (
-                    <Text style={styles.text}>No active model selected</Text>
+                    <>
+                        <Text style={styles.text}>No active model selected</Text>
+                        {installedModels.length > 0 && (
+                            <Text style={styles.smallText}>Select an installed model below to activate it.</Text>
+                        )}
+                    </>
+                )}
+                {activeProvider === 'cloud' && (
+                    <Text style={styles.smallText}>
+                        Cloud provider is selected. Local models remain available for offline fallback.
+                    </Text>
                 )}
             </View>
 
@@ -173,16 +297,20 @@ export default function SettingsScreen() {
                     const installed = isModelInstalled(model.id);
                     const isActive = activeModel?.model_id === model.id;
                     const isDownloading = downloading === model.id;
+                    const modelStatus = getModelStatus(model.id, isDownloading);
 
                     return (
                         <View key={model.id} style={styles.modelCard}>
                             <View style={styles.modelHeader}>
                                 <Text style={styles.modelName}>{model.name}</Text>
-                                {isActive && (
-                                    <View style={styles.activeBadge}>
-                                        <Text style={styles.activeBadgeText}>Active</Text>
-                                    </View>
-                                )}
+                                <View style={[
+                                    styles.statusBadge,
+                                    modelStatus === 'active' ? styles.statusActive :
+                                        modelStatus === 'installed' ? styles.statusInstalled :
+                                            modelStatus === 'downloading' ? styles.statusDownloading : styles.statusAvailable
+                                ]}>
+                                    <Text style={styles.statusBadgeText}>{getStatusLabel(modelStatus)}</Text>
+                                </View>
                             </View>
 
                             <Text style={styles.modelDescription}>{model.description}</Text>
@@ -208,8 +336,9 @@ export default function SettingsScreen() {
                                         <TouchableOpacity
                                             style={styles.downloadButton}
                                             onPress={() => handleDownloadModel(model.id)}
+                                            disabled={!!downloading}
                                         >
-                                            <Text style={styles.downloadButtonText}>Download</Text>
+                                            <Text style={styles.downloadButtonText}>Install</Text>
                                         </TouchableOpacity>
                                     ) : (
                                         <>
@@ -293,6 +422,69 @@ const styles = StyleSheet.create({
         borderLeftWidth: 4,
         borderLeftColor: Colors.primary
     },
+    providerCard: {
+        padding: 12,
+        borderRadius: 6,
+        backgroundColor: Colors.background,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: Colors.border
+    },
+    providerHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 4
+    },
+    providerName: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: Colors.text
+    },
+    providerDescription: {
+        fontSize: 12,
+        color: Colors.secondaryText,
+        marginBottom: 6
+    },
+    providerReason: {
+        fontSize: 12,
+        color: Colors.notification,
+        marginBottom: 8
+    },
+    providerBadge: {
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 999
+    },
+    providerBadgeActive: {
+        backgroundColor: '#DCFCE7'
+    },
+    providerBadgeAvailable: {
+        backgroundColor: '#DBEAFE'
+    },
+    providerBadgeUnavailable: {
+        backgroundColor: '#FEE2E2'
+    },
+    providerBadgeText: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#1F2937'
+    },
+    providerSwitchButton: {
+        backgroundColor: Colors.primary,
+        borderRadius: 6,
+        paddingVertical: 8,
+        alignItems: 'center',
+        justifyContent: 'center'
+    },
+    providerSwitchButtonDisabled: {
+        opacity: 0.55
+    },
+    providerSwitchButtonText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '600'
+    },
     activeModelName: {
         fontSize: 16,
         fontWeight: '600',
@@ -318,14 +510,25 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600'
     },
-    activeBadge: {
-        backgroundColor: Colors.primary,
+    statusBadge: {
         paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 4
+        paddingVertical: 3,
+        borderRadius: 999
     },
-    activeBadgeText: {
-        color: 'white',
+    statusAvailable: {
+        backgroundColor: '#E5E7EB'
+    },
+    statusDownloading: {
+        backgroundColor: '#FEF3C7'
+    },
+    statusInstalled: {
+        backgroundColor: '#DBEAFE'
+    },
+    statusActive: {
+        backgroundColor: '#DCFCE7'
+    },
+    statusBadgeText: {
+        color: '#1F2937',
         fontSize: 10,
         fontWeight: '600'
     },

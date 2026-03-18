@@ -33,7 +33,7 @@ export default function DownloadScreen() {
 
             await ModelManager.downloadModel(modelId, (p) => {
                 setProgress(p);
-            });
+            }, { activate: true });
 
             console.log('Download complete!');
             setComplete(true);
@@ -57,7 +57,7 @@ export default function DownloadScreen() {
     };
 
     const handleSkip = () => {
-        router.replace('/');
+        router.replace('/onboarding/model-selection');
     };
 
     const modelConfig = getModelById(modelId);
@@ -67,7 +67,7 @@ export default function DownloadScreen() {
         <View style={styles.container}>
             <View style={styles.content}>
                 <Text style={styles.title}>
-                    {complete ? '✅ Ready!' : downloading ? 'Downloading...' : 'Download Failed'}
+                    {complete ? 'Installed & Active' : downloading ? 'Downloading Model' : 'Download Failed'}
                 </Text>
 
                 {modelConfig && (
@@ -112,7 +112,7 @@ export default function DownloadScreen() {
                 {complete && (
                     <>
                         <Text style={styles.successText}>
-                            Your brain is ready! Redirecting to the app...
+                            Model installed and activated. Redirecting to your app...
                         </Text>
                     </>
                 )}
@@ -128,7 +128,7 @@ export default function DownloadScreen() {
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
-                            <Text style={styles.skipButtonText}>Skip for Now</Text>
+                            <Text style={styles.skipButtonText}>Back to Model Selection</Text>
                         </TouchableOpacity>
                     </>
                 )}

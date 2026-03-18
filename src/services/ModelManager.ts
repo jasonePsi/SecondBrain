@@ -31,9 +31,13 @@ export const ModelManager = {
 
             // Validate file size is reasonable (at least 50% of expected size)
             const modelConfig = getModelById(modelId);
-            if (modelConfig && fileInfo.size) {
+            const fileSize = fileInfo.exists && 'size' in fileInfo && typeof fileInfo.size === 'number'
+                ? fileInfo.size
+                : 0;
+
+            if (modelConfig && fileSize > 0) {
                 const minExpectedSize = modelConfig.sizeBytes * 0.5;
-                return fileInfo.size >= minExpectedSize;
+                return fileSize >= minExpectedSize;
             }
 
             return true;
@@ -45,7 +49,8 @@ export const ModelManager = {
 
     downloadModel: async (
         modelId: string,
-        onProgress?: (progress: number) => void
+        onProgress?: (progress: number) => void,
+        options: { activate?: boolean } = {}
     ): Promise<string> => {
         const modelConfig = getModelById(modelId);
         if (!modelConfig) {
@@ -76,7 +81,7 @@ export const ModelManager = {
 
             // Verify file size
             const fileInfo = await FileSystem.getInfoAsync(result.uri);
-            if (!fileInfo.exists || !fileInfo.size) {
+            if (!fileInfo.exists || !('size' in fileInfo) || typeof fileInfo.size !== 'number') {
                 throw new Error('Downloaded file not found or has no size');
             }
 
@@ -87,8 +92,12 @@ export const ModelManager = {
                 throw new Error(`Downloaded file too small: ${fileInfo.size} bytes (expected ~${modelConfig.sizeBytes})`);
             }
 
-            // Save to database
-            await ModelRepo.setActiveModel(modelId, result.uri, fileInfo.size);
+            // Save installation metadata.
+            await ModelRepo.installModel(modelId, result.uri, fileInfo.size);
+
+            if (options.activate) {
+                await ModelRepo.activateModel(modelId);
+            }
 
             return result.uri;
         } catch (error) {
@@ -106,8 +115,13 @@ export const ModelManager = {
         }
     },
 
-    deleteModel: async (modelId: string): Promise<void> => {
+    deleteModel: async (
+        modelId: string
+    ): Promise<{ deletedWasActive: boolean; fallbackActiveModelId: string | null }> => {
         try {
+            const currentActiveModel = await ModelRepo.getActiveModel();
+            const deletedWasActive = currentActiveModel?.model_id === modelId;
+
             const path = ModelManager.getModelPath(modelId);
             const fileInfo = await FileSystem.getInfoAsync(path);
 
@@ -117,6 +131,19 @@ export const ModelManager = {
 
             // Remove from database
             await ModelRepo.deleteModel(modelId);
+
+            let fallbackActiveModelId: string | null = null;
+            if (deletedWasActive) {
+                const remainingModels = await ModelRepo.getInstalledModels();
+                if (remainingModels.length > 0) {
+                    fallbackActiveModelId = remainingModels[0].model_id;
+                    await ModelRepo.activateModel(fallbackActiveModelId);
+                } else {
+                    await ModelRepo.clearActiveModel();
+                }
+            }
+
+            return { deletedWasActive, fallbackActiveModelId };
         } catch (error) {
             console.error('Error deleting model:', error);
             throw error;
@@ -139,8 +166,12 @@ export const ModelManager = {
 
         const path = ModelManager.getModelPath(modelId);
         const fileInfo = await FileSystem.getInfoAsync(path);
+        const fileSize = fileInfo.exists && 'size' in fileInfo && typeof fileInfo.size === 'number'
+            ? fileInfo.size
+            : 0;
 
-        await ModelRepo.setActiveModel(modelId, path, fileInfo.size || 0);
+        await ModelRepo.installModel(modelId, path, fileSize);
+        await ModelRepo.activateModel(modelId);
     },
 
     // Legacy compatibility

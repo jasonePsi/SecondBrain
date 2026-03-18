@@ -8,10 +8,17 @@ export interface Space {
     sort_order: number;
 }
 
+const normalizeSpaceRow = (row: any): Space => ({
+    id: row.id,
+    name: row.name,
+    created_at: row.created_at,
+    sort_order: row.sort_order
+});
+
 export const SpaceRepo = {
     getAll: async (): Promise<Space[]> => {
         const res = await db.execute('SELECT * FROM spaces ORDER BY sort_order ASC, created_at ASC');
-        return (res.rows as Space[]) || [];
+        return ((res.rows as any[]) || []).map(normalizeSpaceRow);
     },
     create: async (name: string) => {
         const id = generateId();
@@ -28,7 +35,18 @@ export const SpaceRepo = {
     },
     get: async (id: string): Promise<Space | null> => {
         const res = await db.execute('SELECT * FROM spaces WHERE id = ? LIMIT 1', [id]);
-        return (res.rows as Space[])?.[0] || null;
+        const row = (res.rows as any[])?.[0];
+        return row ? normalizeSpaceRow(row) : null;
+    },
+    getByIds: async (ids: string[]): Promise<Space[]> => {
+        if (ids.length === 0) return [];
+        const uniqueIds = [...new Set(ids)];
+        const placeholders = uniqueIds.map(() => '?').join(', ');
+        const res = await db.execute(
+            `SELECT * FROM spaces WHERE id IN (${placeholders})`,
+            uniqueIds
+        );
+        return ((res.rows as any[]) || []).map(normalizeSpaceRow);
     },
     update: async (id: string, updates: Partial<Pick<Space, 'name' | 'sort_order'>>) => {
         const fields: string[] = [];
@@ -52,6 +70,80 @@ export const SpaceRepo = {
     delete: async (id: string) => {
         await db.transaction(async (tx) => {
             await tx.execute(
+                `DELETE FROM feed_items
+                 WHERE type LIKE 'action%'
+                 AND ref_id IN (
+                    SELECT id FROM actions
+                    WHERE (scope_type = 'space' AND scope_id = ?)
+                       OR (scope_type = 'thread' AND scope_id IN (
+                            SELECT id FROM threads WHERE space_id = ?
+                       ))
+                 )`,
+                [id, id]
+            );
+            await tx.execute(
+                `DELETE FROM feed_items
+                 WHERE type = 'fact'
+                 AND ref_id IN (
+                    SELECT id FROM facts
+                    WHERE (scope_type = 'space' AND scope_id = ?)
+                       OR (scope_type = 'thread' AND scope_id IN (
+                            SELECT id FROM threads WHERE space_id = ?
+                          ))
+                       OR entity_id IN (
+                            SELECT id FROM entities
+                            WHERE thread_id IN (SELECT id FROM threads WHERE space_id = ?)
+                          )
+                 )`,
+                [id, id, id]
+            );
+            await tx.execute(
+                `DELETE FROM feed_items
+                 WHERE type IN ('thread', 'thread_created', 'thread_updated')
+                 AND ref_id IN (SELECT id FROM threads WHERE space_id = ?)`,
+                [id]
+            );
+            await tx.execute(
+                `DELETE FROM feed_items
+                 WHERE type IN ('space', 'space_created') AND ref_id = ?`,
+                [id]
+            );
+            await tx.execute('DELETE FROM feed_items WHERE space_id = ?', [id]);
+
+            await tx.execute(
+                `DELETE FROM facts
+                 WHERE entity_id IN (
+                    SELECT id FROM entities
+                    WHERE thread_id IN (SELECT id FROM threads WHERE space_id = ?)
+                 )`,
+                [id]
+            );
+            await tx.execute(
+                `DELETE FROM facts
+                 WHERE scope_type = 'thread'
+                 AND scope_id IN (SELECT id FROM threads WHERE space_id = ?)`,
+                [id]
+            );
+            await tx.execute(
+                `DELETE FROM facts
+                 WHERE scope_type = 'space' AND scope_id = ?`,
+                [id]
+            );
+
+            await tx.execute(
+                `DELETE FROM entities
+                 WHERE thread_id IN (SELECT id FROM threads WHERE space_id = ?)`,
+                [id]
+            );
+            await tx.execute(
+                `DELETE FROM actions
+                 WHERE (scope_type = 'space' AND scope_id = ?)
+                    OR (scope_type = 'thread' AND scope_id IN (
+                         SELECT id FROM threads WHERE space_id = ?
+                    ))`,
+                [id, id]
+            );
+            await tx.execute(
                 'DELETE FROM messages WHERE thread_id IN (SELECT id FROM threads WHERE space_id = ?)',
                 [id]
             );
@@ -64,6 +156,6 @@ export const SpaceRepo = {
             'SELECT * FROM spaces WHERE name LIKE ? ORDER BY sort_order ASC, created_at ASC',
             [`%${query}%`]
         );
-        return (res.rows as Space[]) || [];
+        return ((res.rows as any[]) || []).map(normalizeSpaceRow);
     }
 };

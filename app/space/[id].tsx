@@ -1,9 +1,10 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
 import { SpaceRepo } from '../../src/repositories/space_repo';
+import { FeedRepo } from '../../src/repositories/feed_repo';
 import { Colors } from '../../src/constants/Colors';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +13,8 @@ export default function SpaceDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [spaceName, setSpaceName] = useState('Space');
   const [isNewThreadOpen, setIsNewThreadOpen] = useState(false);
   const [newThreadName, setNewThreadName] = useState('');
@@ -21,11 +24,19 @@ export default function SpaceDetailScreen() {
 
   const loadData = useCallback(async () => {
     if (!id) return;
-    const space = await SpaceRepo.get(id);
-    if (space) setSpaceName(space.name);
+    try {
+      setLoading(true);
+      setError(null);
+      const space = await SpaceRepo.get(id);
+      if (space) setSpaceName(space.name);
 
-    const data = await ThreadRepo.listBySpace(id);
-    setThreads(data);
+      const data = await ThreadRepo.listBySpace(id);
+      setThreads(data);
+    } catch (err: any) {
+      setError(err?.message || 'Could not load threads.');
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
 
   useFocusEffect(
@@ -49,6 +60,7 @@ export default function SpaceDetailScreen() {
     const trimmed = newThreadName.trim();
     const title = trimmed || `New Thread ${new Date().toLocaleTimeString()}`;
     const newId = await ThreadRepo.create(id, title);
+    await FeedRepo.create(id, 'thread_created', newId);
     closeNewThread();
     await loadData();
     router.push(`/thread/${newId}`);
@@ -76,6 +88,7 @@ export default function SpaceDetailScreen() {
 
     try {
       await ThreadRepo.update(renameTarget.id, { title: trimmed });
+      await FeedRepo.create(id || null, 'thread_updated', renameTarget.id);
       closeRename();
       await loadData();
     } catch (error) {
@@ -151,8 +164,21 @@ export default function SpaceDetailScreen() {
       <FlashList
         data={threads}
         renderItem={renderItem}
-        estimatedItemSize={60}
-        ListEmptyComponent={<Text style={styles.empty}>No threads found.</Text>}
+        ListEmptyComponent={(
+          loading ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.empty}>Loading threads…</Text>
+            </View>
+          ) : (
+            <View style={styles.centerState}>
+              <Text style={styles.empty}>No threads yet. Create your first thread.</Text>
+            </View>
+          )
+        )}
+        ListHeaderComponent={error ? (
+          <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+        ) : null}
       />
 
       <Modal
@@ -260,6 +286,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
     color: Colors.secondaryText
+  },
+  centerState: {
+    marginTop: 40,
+    alignItems: 'center'
+  },
+  inlineError: {
+    color: Colors.notification,
+    fontSize: 12,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4
   },
   headerActions: {
     flexDirection: 'row',
