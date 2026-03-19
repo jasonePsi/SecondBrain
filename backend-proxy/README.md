@@ -29,6 +29,11 @@ npm ci
 npm run verify
 ```
 
+`npm run verify` runs:
+
+- syntax check (`node --check src/server.js`)
+- lightweight smoke tests (`tests/proxy.smoke.test.mjs`)
+
 ## Required environment variables
 
 - `OPENAI_API_KEY` (required for cloud calls)
@@ -39,3 +44,35 @@ npm run verify
 - `OPENAI_PROXY_REQUEST_TIMEOUT_MS` (default: `25000`)
 - `OPENAI_PROXY_DEFAULT_PRIVACY_MODE` (default: `minimal`)
 - `OPENAI_PROXY_DEFAULT_STORE` (default: `false`)
+
+## Startup validation
+
+The proxy validates configuration at startup and fails fast for invalid values (for example invalid port or timeout range). Missing `OPENAI_API_KEY` is reported as a startup warning and `/health` exposes `configured: false` until the key is set.
+
+## Error Response Shape
+
+For non-2xx responses, proxy endpoints return:
+
+```json
+{
+  "error": {
+    "code": "SOME_CODE",
+    "message": "Human-readable message"
+  },
+  "requestId": "trace-id"
+}
+```
+
+This keeps mobile-side handling and debugging stable.
+
+Malformed JSON payloads are normalized as:
+
+```json
+{
+  "error": {
+    "code": "INVALID_JSON",
+    "message": "Malformed JSON body"
+  },
+  "requestId": "trace-id"
+}
+```

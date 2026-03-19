@@ -19,6 +19,15 @@
 4. Delete active model:
    - fallback model becomes active if present, else active model is cleared.
 
+## Provider Availability (Cloud Unavailable Scenario)
+
+1. Set cloud provider in Settings.
+2. Stop backend-proxy (or point app to an unreachable proxy URL).
+3. Confirm:
+   - Settings shows cloud as unavailable with actionable reason.
+   - app startup routes to Settings when cloud is selected but unavailable.
+   - thread send shows a clear provider/model availability message and does not crash.
+
 ## Core Navigation
 
 1. Create a space and thread.
@@ -39,8 +48,16 @@
 2. Confirm:
    - Brain tab shows entities/facts/open actions with scope labels.
    - Feed tab shows readable cards (not raw type/ref values).
+   - reminder cards can be marked done/canceled and update immediately.
 3. Tap-through:
    - feed/brain items navigate to related thread/space when route is available.
+
+## End-to-End Memory Scenario
+
+1. In a thread, send: "My dentist appointment is next Tuesday at 9am. Remind me the day before."
+2. Confirm assistant reply is persisted even if post-processing later fails.
+3. Confirm Brain shows fact(s) and open reminder in scoped sections.
+4. Confirm Feed shows a human-readable reminder card.
 
 ## Action Management
 
@@ -54,7 +71,8 @@
 1. Type a query and verify debounce (no instant keystroke flooding).
 2. Validate sectioned results (spaces/threads/messages).
 3. Confirm message results show snippets and route to thread.
-4. Try a no-results query and verify friendly empty state.
+4. Open a message hit and confirm thread scrolls/highlights relevant message context.
+5. Try a no-results query and verify friendly empty state.
 
 ## States and Polish
 

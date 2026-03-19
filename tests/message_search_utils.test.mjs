@@ -16,3 +16,9 @@ test('buildMessageSnippet clamps long text with ellipsis', () => {
   const snippet = buildMessageSnippet('x'.repeat(20), 10);
   assert.equal(snippet, 'xxxxxxxxx…');
 });
+
+test('buildMessageSnippet focuses around query token when provided', () => {
+  const text = 'alpha beta gamma delta epsilon zeta eta theta iota kappa';
+  const snippet = buildMessageSnippet(text, 24, 'theta');
+  assert.ok(snippet.toLowerCase().includes('theta'));
+});

@@ -144,6 +144,21 @@ export default function SpaceDetailScreen() {
     </View>
   );
 
+  if (error && !loading && threads.length === 0) {
+    return (
+      <View style={styles.container}>
+        <Stack.Screen options={{ title: spaceName }} />
+        <View style={styles.fullState}>
+          <Text style={styles.errorStateText}>Could not load threads right now.</Text>
+          <Text style={styles.errorStateSubtext}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadData}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -177,7 +192,7 @@ export default function SpaceDetailScreen() {
           )
         )}
         ListHeaderComponent={error ? (
-          <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+          <Text style={styles.inlineError}>Could not refresh threads: {error}</Text>
         ) : null}
       />
 
@@ -291,12 +306,41 @@ const styles = StyleSheet.create({
     marginTop: 40,
     alignItems: 'center'
   },
+  fullState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24
+  },
   inlineError: {
     color: Colors.notification,
     fontSize: 12,
     marginHorizontal: 16,
     marginTop: 8,
     marginBottom: 4
+  },
+  errorStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.text
+  },
+  errorStateSubtext: {
+    marginTop: 8,
+    fontSize: 13,
+    color: Colors.secondaryText,
+    textAlign: 'center',
+    paddingHorizontal: 24
+  },
+  retryButton: {
+    marginTop: 14,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontWeight: '600'
   },
   headerActions: {
     flexDirection: 'row',

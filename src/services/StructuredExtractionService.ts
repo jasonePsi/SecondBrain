@@ -1,8 +1,8 @@
 import { LLMService } from './LLMService';
 import type { AIProviderType } from './LLMService';
 import {
-    getJsonObjectCandidate,
     normalizeScope,
+    parseStructuredExtractionRaw,
     parseTimestamp,
     StructuredExtractionDiagnostics,
     validateOps,
@@ -49,40 +49,25 @@ export const StructuredExtractionService = {
             provider: options?.provider,
             requestId: options?.requestId
         });
-        const jsonCandidate = getJsonObjectCandidate(raw);
-
-        try {
-            const parsed = JSON.parse(jsonCandidate);
-            const validated = validateOps(parsed?.ops);
+        const parsed = parseStructuredExtractionRaw(raw);
+        if (parsed.parseError) {
+            console.warn('[StructuredExtraction] parse failed', {
+                turnId: options?.turnId,
+                error: parsed.parseError,
+                rawLength: raw.length
+            });
+        } else {
             console.log('[StructuredExtraction] parsed ops', {
                 turnId: options?.turnId,
                 rawLength: raw.length,
-                opCount: validated.ops.length,
-                droppedOpsCount: validated.diagnostics.droppedOpsCount
+                opCount: parsed.ops.length,
+                droppedOpsCount: parsed.diagnostics.droppedOpsCount
             });
-            return {
-                raw,
-                ops: validated.ops,
-                diagnostics: validated.diagnostics
-            };
-        } catch (error: any) {
-            console.warn('[StructuredExtraction] parse failed', {
-                turnId: options?.turnId,
-                error: error?.message,
-                rawLength: raw.length
-            });
-            return {
-                raw,
-                ops: [],
-                parseError: error?.message || 'Invalid JSON',
-                diagnostics: {
-                    rawOpsCount: 0,
-                    acceptedOpsCount: 0,
-                    droppedOpsCount: 0,
-                    droppedReasons: ['json_parse_failed']
-                }
-            };
         }
+        return {
+            raw,
+            ...parsed
+        };
     }
 };
 
@@ -90,5 +75,6 @@ export const __structuredExtractionTestUtils = {
     parseTimestamp,
     normalizeScope,
     validateOps,
-    getJsonObjectCandidate
+    parseStructuredExtractionRaw,
+    buildExtractionPrompt
 };

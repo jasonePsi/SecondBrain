@@ -32,7 +32,7 @@ export default function FeedScreen() {
             const next = await FeedService.listCards(undefined, 120);
             setCards(next);
         } catch (err: any) {
-            setError(err?.message || 'Could not load feed.');
+            setError(err?.message || 'Could not load activity right now.');
         } finally {
             setLoading(false);
         }
@@ -68,19 +68,29 @@ export default function FeedScreen() {
 
     const renderItem = ({ item }: { item: FeedCard }) => {
         const isActionUpdating = !!item.actionId && updatingActionId === item.actionId;
-
-        return (
-            <TouchableOpacity
-                style={styles.card}
-                onPress={() => navigateTo(item.route)}
-                disabled={!item.route}
-            >
+        const cardContent = (
+            <>
                 <Text style={styles.cardTitle}>{item.title}</Text>
                 <Text style={styles.cardBody}>{item.description}</Text>
                 {!!item.scopeLabel && (
                     <Text style={styles.cardMeta}>{item.scopeLabel}</Text>
                 )}
                 <Text style={styles.cardMeta}>{formatTimestamp(item.createdAt)}</Text>
+            </>
+        );
+
+        return (
+            <View style={styles.card}>
+                {item.route ? (
+                    <TouchableOpacity
+                        style={styles.cardTouchable}
+                        onPress={() => navigateTo(item.route)}
+                    >
+                        {cardContent}
+                    </TouchableOpacity>
+                ) : (
+                    <View style={styles.cardTouchable}>{cardContent}</View>
+                )}
 
                 {(item.canMarkDone || item.canCancel) && (
                     <View style={styles.actionRow}>
@@ -98,11 +108,11 @@ export default function FeedScreen() {
                             onPress={() => handleActionUpdate(item, 'canceled')}
                             disabled={isActionUpdating || !item.canCancel}
                         >
-                            <Text style={styles.actionButtonText}>Cancel</Text>
+                            <Text style={styles.actionButtonText}>Mark Canceled</Text>
                         </TouchableOpacity>
                     </View>
                 )}
-            </TouchableOpacity>
+            </View>
         );
     };
 
@@ -118,7 +128,7 @@ export default function FeedScreen() {
     if (error && cards.length === 0) {
         return (
             <View style={styles.centerState}>
-                <Text style={styles.errorText}>{error}</Text>
+                <Text style={styles.errorText}>Could not refresh feed. {error}</Text>
                 <TouchableOpacity style={styles.retryButton} onPress={loadFeed}>
                     <Text style={styles.retryButtonText}>Retry</Text>
                 </TouchableOpacity>
@@ -136,12 +146,12 @@ export default function FeedScreen() {
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyTitle}>No activity yet</Text>
                         <Text style={styles.emptyText}>
-                            Start a conversation or capture a reminder to populate your feed.
+                            Start a conversation or capture a reminder. Your recent activity will appear here.
                         </Text>
                     </View>
                 }
                 ListHeaderComponent={error ? (
-                    <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                    <Text style={styles.inlineError}>Feed refresh issue: {error}</Text>
                 ) : null}
             />
             <CaptureFAB onPress={() => router.push('/space/new')} />
@@ -191,6 +201,9 @@ const styles = StyleSheet.create({
         borderColor: Colors.border,
         padding: 12,
         marginBottom: 10
+    },
+    cardTouchable: {
+        borderRadius: 10
     },
     cardTitle: {
         fontSize: 15,

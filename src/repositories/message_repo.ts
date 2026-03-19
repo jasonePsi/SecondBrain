@@ -32,6 +32,24 @@ export const MessageRepo = {
         return typeof count === 'number' ? count : Number(count || 0);
     },
 
+    getOffsetFromNewest: async (threadId: string, messageId: string): Promise<number | null> => {
+        const target = await MessageRepo.getById(messageId);
+        if (!target || target.thread_id !== threadId) return null;
+
+        const res = await db.execute(
+            `SELECT COUNT(*) as count
+             FROM messages
+             WHERE thread_id = ?
+               AND (
+                    created_at > ?
+                    OR (created_at = ? AND id > ?)
+               )`,
+            [threadId, target.created_at, target.created_at, target.id]
+        );
+        const count = (res.rows as any[])?.[0]?.count;
+        return typeof count === 'number' ? count : Number(count || 0);
+    },
+
     listByThread: async (threadId: string, limit = 50, offset = 0): Promise<Message[]> => {
         const res = await db.execute('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', [threadId, limit, offset]);
         return ((res.rows as any[]) || []).map(normalizeMessageRow);
@@ -79,7 +97,7 @@ export const MessageRepo = {
             const fallback = await MessageRepo.search(trimmed, limit);
             return fallback.map((message, index) => ({
                 ...message,
-                snippet: buildMessageSnippet(message.text),
+                snippet: buildMessageSnippet(message.text, 140, trimmed),
                 score: index + 1
             }));
         }
@@ -102,7 +120,7 @@ export const MessageRepo = {
                 ...normalizeMessageRow(row),
                 snippet: typeof row.snippet_text === 'string' && row.snippet_text.trim().length > 0
                     ? row.snippet_text
-                    : buildMessageSnippet(row.text || ''),
+                    : buildMessageSnippet(row.text || '', 140, trimmed),
                 score: typeof row.rank_score === 'number' ? row.rank_score : Number(row.rank_score || 0)
             }));
         } catch (error) {
@@ -110,7 +128,7 @@ export const MessageRepo = {
             const fallback = await MessageRepo.search(trimmed, limit);
             return fallback.map((message, index) => ({
                 ...message,
-                snippet: buildMessageSnippet(message.text),
+                snippet: buildMessageSnippet(message.text, 140, trimmed),
                 score: index + 1
             }));
         }

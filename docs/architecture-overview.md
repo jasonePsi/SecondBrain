@@ -46,6 +46,7 @@ Core tables:
    - structured extraction (`StructuredExtractionService`)
    - operation execution (`OpsExecutor`)
    - summary update (`MemoryService.updateThreadSummaryIfNeeded`)
+   - each stage degrades gracefully (extraction/ops/summary failures do not break reply persistence)
 
 ## Provider Architecture
 
@@ -61,6 +62,10 @@ Implementations:
 
 - `LocalLlamaProvider` (`src/services/providers/LocalLlamaProvider.ts`)
 - `OpenAIProxyProvider` (`src/services/providers/OpenAIProxyProvider.ts`)
+
+`backend-proxy` validates config at startup (host/port/timeout/model IDs), emits non-secret startup warnings, and returns stable error shapes with `error.code`, `error.message`, and `requestId`.
+
+Cloud provider error handling normalizes proxy failures into stable, user-safe messages.
 
 Provider selection is persisted in `app_settings` (`active_ai_provider`) and managed from Settings.
 
@@ -89,6 +94,18 @@ Supported op families:
 - `UPSERT_FACT`
 - `CREATE_ACTION` (reminders)
 - `UPDATE_THREAD`
+
+## Validation Story
+
+App-side:
+
+- `npm run typecheck`
+- `npm test`
+- `npm run verify`
+
+Proxy-side:
+
+- `npm --prefix backend-proxy run verify` (syntax + smoke tests)
 
 ## Feed and Brain Product Surfaces
 

@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "check": "node --check src/server.js",
-    "test": "npm run check",
-    "verify": "npm run check"
+    "test": "node --test tests/*.test.mjs",
+    "verify": "npm run check && npm test"
   },
   "dependencies": {
     "cors": "^2.8.5",

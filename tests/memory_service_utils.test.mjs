@@ -23,3 +23,37 @@ test('selectRecentContextMessages keeps latest messages within budget', () => {
   assert.equal(result.selectedMessages[0].content, 'latest ask');
   assert.equal(result.droppedCount, 2);
 });
+
+test('selectRecentContextMessages preserves chronology of selected subset', () => {
+  const messages = [
+    { role: 'user', content: 'one' },
+    { role: 'assistant', content: 'two' },
+    { role: 'user', content: 'three' }
+  ];
+
+  const result = selectMessagesWithinCharBudget(messages, {
+    maxChars: 80,
+    reservedChars: 30
+  });
+
+  assert.deepEqual(
+    result.selectedMessages.map((message) => message.content),
+    ['two', 'three']
+  );
+  assert.ok(result.usedChars <= 80);
+});
+
+test('selectRecentContextMessages drops all messages when reserved budget is exhausted', () => {
+  const messages = [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'world' }
+  ];
+
+  const result = selectMessagesWithinCharBudget(messages, {
+    maxChars: 10,
+    reservedChars: 10
+  });
+
+  assert.equal(result.selectedMessages.length, 0);
+  assert.equal(result.droppedCount, 2);
+});

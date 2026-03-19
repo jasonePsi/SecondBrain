@@ -36,6 +36,12 @@ export interface StructuredExtractionDiagnostics {
     droppedReasons: string[];
 }
 
+export interface ParsedStructuredExtraction {
+    ops: ValidatedStructuredOp[];
+    parseError?: string;
+    diagnostics: StructuredExtractionDiagnostics;
+}
+
 export const parseTimestamp = (value: unknown): number | null => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string') {
@@ -168,4 +174,29 @@ export const getJsonObjectCandidate = (raw: string): string => {
         return trimmed.slice(firstBrace, lastBrace + 1);
     }
     return trimmed;
+};
+
+export const parseStructuredExtractionRaw = (
+    raw: string
+): ParsedStructuredExtraction => {
+    const jsonCandidate = getJsonObjectCandidate(raw);
+    try {
+        const parsed = JSON.parse(jsonCandidate);
+        const validated = validateOps(parsed?.ops);
+        return {
+            ops: validated.ops,
+            diagnostics: validated.diagnostics
+        };
+    } catch (error: any) {
+        return {
+            ops: [],
+            parseError: error?.message || 'Invalid JSON',
+            diagnostics: {
+                rawOpsCount: 0,
+                acceptedOpsCount: 0,
+                droppedOpsCount: 0,
+                droppedReasons: ['json_parse_failed']
+            }
+        };
+    }
 };

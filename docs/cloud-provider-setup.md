@@ -12,7 +12,7 @@ The mobile app never stores a real OpenAI API key.
 ```bash
 cd backend-proxy
 cp .env.example .env
-npm install
+npm ci
 npm start
 ```
 
@@ -75,3 +75,21 @@ Model routing defaults:
 
 - `assistant` -> `gpt-5.4`
 - other tasks (`summary`, `extraction`, `title`, `ranking`) -> `gpt-5.4-mini`
+
+## Proxy validation
+
+Run lightweight proxy checks:
+
+```bash
+cd backend-proxy
+npm run verify
+```
+
+This includes syntax + smoke coverage for:
+
+- `GET /health`
+- invalid payload handling
+- malformed JSON handling (`INVALID_JSON`)
+- stable error shape with `error.code`, `error.message`, and `requestId`
+
+At startup, the proxy validates config values (port/timeout/models) and fails fast on invalid settings.

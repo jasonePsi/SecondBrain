@@ -1,6 +1,12 @@
 import { MemoryService, SummaryUpdateResult } from './MemoryService';
 import { OpsExecutionReport, OpsExecutor } from './OpsExecutor';
 import { StructuredExtractionResult, StructuredExtractionService } from './StructuredExtractionService';
+import {
+    emptyExecutionReport,
+    emptySummaryResult,
+    extractionExceptionResult,
+    opsExecutionFailureReport
+} from './turn_post_processing_utils';
 import type { AIProviderType } from './LLMService';
 
 export interface TurnPostProcessingInput {
@@ -18,21 +24,21 @@ export interface TurnPostProcessingResult {
     summary: SummaryUpdateResult;
 }
 
-const emptyExecutionReport = (): OpsExecutionReport => ({
-    executedCount: 0,
-    skippedCount: 0,
-    failedCount: 0,
-    logs: []
-});
-
-const emptySummaryResult = (): SummaryUpdateResult => ({
-    updated: false,
-    summaryLength: 0,
-    messageCount: 0
-});
+interface TurnPostProcessingDeps {
+    extractFromTurn: typeof StructuredExtractionService.extractFromTurn;
+    executeOps: typeof OpsExecutor.execute;
+    updateSummary: typeof MemoryService.updateThreadSummaryIfNeeded;
+}
 
 export const TurnPostProcessingService = {
-    processTurn: async (input: TurnPostProcessingInput): Promise<TurnPostProcessingResult> => {
+    processTurn: async (
+        input: TurnPostProcessingInput,
+        deps?: Partial<TurnPostProcessingDeps>
+    ): Promise<TurnPostProcessingResult> => {
+        const extractFromTurn = deps?.extractFromTurn || StructuredExtractionService.extractFromTurn;
+        const executeOps = deps?.executeOps || OpsExecutor.execute;
+        const updateSummary = deps?.updateSummary || MemoryService.updateThreadSummaryIfNeeded;
+
         let extraction: StructuredExtractionResult = {
             raw: '',
             ops: [],
@@ -46,7 +52,7 @@ export const TurnPostProcessingService = {
         };
 
         try {
-            extraction = await StructuredExtractionService.extractFromTurn(
+            extraction = await extractFromTurn(
                 input.userMessage,
                 input.assistantMessage,
                 {
@@ -56,17 +62,9 @@ export const TurnPostProcessingService = {
                 }
             );
         } catch (error: any) {
-            extraction = {
-                raw: '',
-                ops: [],
-                parseError: error?.message || 'Structured extraction failed',
-                diagnostics: {
-                    rawOpsCount: 0,
-                    acceptedOpsCount: 0,
-                    droppedOpsCount: 0,
-                    droppedReasons: ['extraction_exception']
-                }
-            };
+            extraction = extractionExceptionResult(
+                error?.message || 'Structured extraction failed'
+            ) as StructuredExtractionResult;
             console.warn('[TurnPostProcessing] extraction failed', {
                 turnId: input.turnId,
                 threadId: input.threadId,
@@ -77,23 +75,17 @@ export const TurnPostProcessingService = {
         let executionReport = emptyExecutionReport();
         if (extraction.ops.length > 0) {
             try {
-                executionReport = await OpsExecutor.execute(
+                executionReport = await executeOps(
                     { ops: extraction.ops },
                     input.spaceId || undefined,
                     input.threadId,
                     { turnId: input.turnId }
                 );
             } catch (error: any) {
-                executionReport = {
-                    executedCount: 0,
-                    skippedCount: 0,
-                    failedCount: extraction.ops.length,
-                    logs: [{
-                        op: 'POST_PROCESSING_EXECUTION',
-                        status: 'failed',
-                        detail: error?.message || 'Ops execution failed'
-                    }]
-                };
+                executionReport = opsExecutionFailureReport(
+                    extraction.ops.length,
+                    error?.message || 'Ops execution failed'
+                );
                 console.warn('[TurnPostProcessing] ops execution failed', {
                     turnId: input.turnId,
                     threadId: input.threadId,
@@ -104,7 +96,7 @@ export const TurnPostProcessingService = {
 
         let summary = emptySummaryResult();
         try {
-            summary = await MemoryService.updateThreadSummaryIfNeeded(input.threadId, {
+            summary = await updateSummary(input.threadId, {
                 provider: input.provider,
                 requestId: input.turnId ? `${input.turnId}:summary` : undefined,
                 turnId: input.turnId

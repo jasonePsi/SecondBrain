@@ -62,10 +62,10 @@ const normalizeReminderText = (action: Action | undefined): string => {
 };
 
 const getActionTitle = (feedType: string): string => {
-    if (feedType === 'action_done') return 'Reminder marked done';
+    if (feedType === 'action_done') return 'Reminder completed';
     if (feedType === 'action_canceled') return 'Reminder canceled';
     if (feedType === 'action_snoozed') return 'Reminder snoozed';
-    return 'Reminder created';
+    return 'Reminder scheduled';
 };
 
 const humanizeFallbackType = (type: string): string => {
@@ -138,7 +138,7 @@ const toActionCard = (
 ): FeedCard => {
     const reminderText = normalizeReminderText(action);
     const scheduledAt = action?.scheduled_for || item.scheduled_for || null;
-    const whenLabel = scheduledAt ? ` at ${new Date(scheduledAt).toLocaleString()}` : '';
+    const whenLabel = scheduledAt ? ` for ${new Date(scheduledAt).toLocaleString()}` : '';
     const scopeType = (action?.scope_type || 'global') as SupportedScope;
     const scopeId = action?.scope_id || null;
 
@@ -146,7 +146,7 @@ const toActionCard = (
         id: item.id,
         feedType: item.type,
         title: getActionTitle(item.type),
-        description: `${reminderText}${whenLabel}`,
+        description: `"${reminderText}"${whenLabel}`,
         createdAt: item.created_at,
         route: routeForScope(scopeType, scopeId),
         scopeLabel: toScopeLabel(scopeType, scopeId, threadMap, spaceMap),

@@ -30,11 +30,13 @@ npm start
 npm run typecheck
 npm test
 npm run verify
+npm run verify:all
 ```
 
 - `typecheck`: TypeScript checks (`tsc --noEmit`)
 - `test`: deterministic hardening tests
-- `verify`: top-level safety command (`typecheck` + `test`)
+- `verify`: app safety command (`typecheck` + `test`)
+- `verify:all`: app checks + backend-proxy verification (syntax + smoke tests)
 
 ## Backend Proxy Setup
 

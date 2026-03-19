@@ -8,6 +8,7 @@ import {
     View
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../src/constants/Colors';
 import {
     BrainActionCard,
@@ -35,7 +36,7 @@ export default function BrainScreen() {
             const next = await BrainService.getSnapshot();
             setSnapshot(next);
         } catch (err: any) {
-            setError(err?.message || 'Could not load memory.');
+            setError(err?.message || 'Could not load memory right now.');
         } finally {
             setLoading(false);
         }
@@ -63,8 +64,14 @@ export default function BrainScreen() {
                 <Text style={styles.cardTitle}>{entity.name}</Text>
                 <Text style={styles.cardTag}>{entity.type}</Text>
             </View>
-            <Text style={styles.cardMeta}>{entity.scopeLabel}</Text>
+            <Text style={styles.cardMeta}>Scope: {entity.scopeLabel}</Text>
             <Text style={styles.cardMeta}>Captured {formatTimestamp(entity.createdAt)}</Text>
+            {!!entity.route && (
+                <View style={styles.routeHintRow}>
+                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
+                </View>
+            )}
         </TouchableOpacity>
     );
 
@@ -80,8 +87,14 @@ export default function BrainScreen() {
                 {fact.value}
                 {fact.unit ? ` ${fact.unit}` : ''}
             </Text>
-            <Text style={styles.cardMeta}>{fact.scopeLabel}</Text>
+            <Text style={styles.cardMeta}>Scope: {fact.scopeLabel}</Text>
             <Text style={styles.cardMeta}>Updated {formatTimestamp(fact.effectiveAt)}</Text>
+            {!!fact.route && (
+                <View style={styles.routeHintRow}>
+                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
+                </View>
+            )}
         </TouchableOpacity>
     );
 
@@ -101,12 +114,18 @@ export default function BrainScreen() {
                     {action.status}
                 </Text>
             </View>
-            <Text style={styles.cardMeta}>{action.scopeLabel}</Text>
+            <Text style={styles.cardMeta}>Scope: {action.scopeLabel}</Text>
             <Text style={styles.cardMeta}>
                 {action.scheduledFor
                     ? `Scheduled ${formatTimestamp(action.scheduledFor)}`
                     : `Created ${formatTimestamp(action.createdAt)}`}
             </Text>
+            {!!action.route && (
+                <View style={styles.routeHintRow}>
+                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
+                </View>
+            )}
         </TouchableOpacity>
     );
 
@@ -138,7 +157,10 @@ export default function BrainScreen() {
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             <Text style={styles.header}>Brain</Text>
             <Text style={styles.subtitle}>
-                {entities.length} entities, {facts.length} facts, {actions.length} open action(s)
+                Structured memory from your conversations.
+            </Text>
+            <Text style={styles.subtitleMeta}>
+                {entities.length} entities · {facts.length} facts · {actions.length} open action(s)
             </Text>
             {!!snapshot?.loadedAt && (
                 <Text style={styles.loadedAt}>Last refreshed {formatTimestamp(snapshot.loadedAt)}</Text>
@@ -147,7 +169,7 @@ export default function BrainScreen() {
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Entities</Text>
                 {entities.length === 0
-                    ? <Text style={styles.emptyText}>No entities extracted yet.</Text>
+                    ? <Text style={styles.emptyText}>No entities yet. Keep chatting and memory extraction will populate this section.</Text>
                     : entities.map(renderEntity)}
             </View>
 
@@ -216,6 +238,11 @@ const styles = StyleSheet.create({
         marginTop: 4,
         color: Colors.secondaryText,
         fontSize: 13
+    },
+    subtitleMeta: {
+        marginTop: 2,
+        color: Colors.secondaryText,
+        fontSize: 12
     },
     loadedAt: {
         marginTop: 2,
@@ -293,6 +320,17 @@ const styles = StyleSheet.create({
         marginTop: 3,
         fontSize: 12,
         color: Colors.secondaryText
+    },
+    routeHintRow: {
+        marginTop: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2
+    },
+    routeHintText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     inlineError: {
         marginTop: 14,

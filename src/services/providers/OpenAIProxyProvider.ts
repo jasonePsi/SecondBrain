@@ -1,5 +1,9 @@
 import { AIConfig } from '../../constants/AIConfig';
 import { sanitizeAssistantResponse } from '../ai/sanitize';
+import {
+    toProxyErrorMessage,
+    trimErrorMessage
+} from './openai_proxy_error_utils';
 import type {
     AIProvider,
     AIProviderStatus,
@@ -32,12 +36,6 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const generateRequestId = (prefix: string): string => {
     const random = Math.random().toString(36).slice(2, 10);
     return `${prefix}_${Date.now()}_${random}`;
-};
-
-const trimErrorMessage = (message: string, maxChars = 180): string => {
-    const normalized = message.replace(/\s+/g, ' ').trim();
-    if (normalized.length <= maxChars) return normalized;
-    return normalized.slice(0, maxChars - 1) + '…';
 };
 
 const fetchWithTimeout = async (
@@ -125,14 +123,14 @@ export class OpenAIProxyProvider implements AIProvider {
                 );
 
                 if (!response.ok) {
-                    const errorText = trimErrorMessage(await response.text());
+                    const responseBody = await response.text();
                     const shouldRetry = RETRYABLE_STATUS_CODES.has(response.status) && attempt < retries;
                     if (shouldRetry) {
                         await delay(300 * (attempt + 1));
                         continue;
                     }
                     const nonRetryableError = new Error(
-                        errorText || `Cloud request failed (${response.status})`
+                        toProxyErrorMessage(response.status, responseBody, requestId)
                     );
                     (nonRetryableError as any).retryable = false;
                     throw nonRetryableError;

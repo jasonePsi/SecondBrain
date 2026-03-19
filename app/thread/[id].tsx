@@ -72,13 +72,22 @@ const createTurnId = (): string => {
     return `turn_${Date.now()}_${suffix}`;
 };
 
-const getUserFacingTurnError = (): string => {
+const getUserFacingTurnError = (stage?: string): string => {
+    if (stage === 'resolve_provider' || stage === 'init_provider') {
+        return 'Could not start the selected AI provider. Check Settings and try again.';
+    }
+    if (stage === 'build_memory_context') {
+        return 'Could not prepare conversation context. Please try again.';
+    }
     return 'Could not generate a reply right now. Check your provider/model settings and try again.';
 };
 
 export default function ThreadScreen() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const { id, messageId } = useLocalSearchParams<{ id: string; messageId?: string | string[] }>();
     const router = useRouter();
+    const targetMessageId = Array.isArray(messageId)
+        ? (messageId[0] || null)
+        : (typeof messageId === 'string' && messageId.trim().length > 0 ? messageId : null);
 
     const [messages, setMessages] = useState<Message[]>([]);
     const [inputText, setInputText] = useState('');
@@ -89,11 +98,15 @@ export default function ThreadScreen() {
     const [speechLang, setSpeechLang] = useState<SupportedSpeechLanguage>(() => getInitialSpeechLanguage());
     const [isLoading, setIsLoading] = useState(false);
     const [llmReady, setLlmReady] = useState(false);
+    const [llmInitError, setLlmInitError] = useState<string | null>(null);
     const llmInitializing = useRef(false);
     const postProcessingQueueRef = useRef<Promise<void>>(Promise.resolve());
     const isMountedRef = useRef(true);
     const inFlightTurnIdRef = useRef<string | null>(null);
-    const [micStatus, setMicStatus] = useState('Idle');
+    const [micStatus, setMicStatus] = useState('Microphone ready');
+    const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+    const lastJumpedMessageIdRef = useRef<string | null>(null);
+    const flashListRef = useRef<any>(null);
 
     const [loadingInitialMessages, setLoadingInitialMessages] = useState(true);
     const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -112,7 +125,7 @@ export default function ThreadScreen() {
     }, []);
 
     const refreshLoadedMessages = useCallback(async (targetVisibleCount = MESSAGE_PAGE_SIZE) => {
-        if (!id) return;
+        if (!id || !isMountedRef.current) return;
 
         const limit = Math.max(
             MESSAGE_PAGE_SIZE,
@@ -123,6 +136,7 @@ export default function ThreadScreen() {
             MessageRepo.countByThread(id),
             MessageRepo.listByThread(id, limit, 0)
         ]);
+        if (!isMountedRef.current) return;
 
         const chronologicalMessages = [...newestMessages].sort((a, b) => a.created_at - b.created_at);
         setMessages(chronologicalMessages);
@@ -138,11 +152,20 @@ export default function ThreadScreen() {
         }
         setLoadingInitialMessages(true);
         try {
-            await refreshLoadedMessages(MESSAGE_PAGE_SIZE);
+            let targetVisibleCount = MESSAGE_PAGE_SIZE;
+            if (targetMessageId) {
+                const targetOffset = await MessageRepo.getOffsetFromNewest(id, targetMessageId);
+                if (typeof targetOffset === 'number' && targetOffset >= 0) {
+                    targetVisibleCount = Math.max(MESSAGE_PAGE_SIZE, targetOffset + 8);
+                }
+            }
+            await refreshLoadedMessages(targetVisibleCount);
         } finally {
-            setLoadingInitialMessages(false);
+            if (isMountedRef.current) {
+                setLoadingInitialMessages(false);
+            }
         }
-    }, [id, refreshLoadedMessages]);
+    }, [id, refreshLoadedMessages, targetMessageId]);
 
     const loadOlderMessages = useCallback(async () => {
         if (!id || loadingOlderMessages || !hasOlderMessages) return;
@@ -158,36 +181,52 @@ export default function ThreadScreen() {
             const chronologicalOlderBatch = [...olderBatch].sort((a, b) => a.created_at - b.created_at);
             const nextLoadedCount = loadedMessageCount + olderBatch.length;
 
+            if (!isMountedRef.current) return;
             setMessages((prev) => [...chronologicalOlderBatch, ...prev]);
             setLoadedMessageCount(nextLoadedCount);
             setHasOlderMessages(nextLoadedCount < totalMessageCount);
         } finally {
-            setLoadingOlderMessages(false);
+            if (isMountedRef.current) {
+                setLoadingOlderMessages(false);
+            }
         }
     }, [id, loadingOlderMessages, hasOlderMessages, loadedMessageCount, totalMessageCount]);
 
     useEffect(() => {
         const init = async () => {
-            if (id) {
-                const t = await ThreadRepo.get(id);
-                if (t) {
-                    setThreadTitle(t.title);
-                    setThreadSpaceId(t.space_id);
+            try {
+                if (id) {
+                    const t = await ThreadRepo.get(id);
+                    if (t && isMountedRef.current) {
+                        setThreadTitle(t.title);
+                        setThreadSpaceId(t.space_id);
+                    }
+                    await loadInitialMessages();
                 }
-                await loadInitialMessages();
-            }
 
-            if (!llmInitializing.current && !llmReady) {
-                llmInitializing.current = true;
-                try {
-                    await LLMService.init();
-                    setLlmReady(true);
-                    console.log('LLM initialized successfully');
-                } catch (error) {
-                    console.error('Failed to initialize LLM:', error);
-                    Alert.alert('AI Error', 'Could not initialize AI model. Please check Settings.');
-                } finally {
-                    llmInitializing.current = false;
+                if (!llmInitializing.current && !llmReady) {
+                    llmInitializing.current = true;
+                    try {
+                        await LLMService.init();
+                        if (isMountedRef.current) {
+                            setLlmReady(true);
+                            setLlmInitError(null);
+                        }
+                        console.log('LLM initialized successfully');
+                    } catch (error) {
+                        console.error('Failed to initialize LLM:', error);
+                        if (isMountedRef.current) {
+                            setLlmReady(false);
+                            setLlmInitError('AI is unavailable. Check provider and model setup in Settings.');
+                        }
+                    } finally {
+                        llmInitializing.current = false;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to initialize thread screen:', error);
+                if (isMountedRef.current) {
+                    setLlmInitError('Could not load this thread. Pull to retry or reopen the space.');
                 }
             }
         };
@@ -200,35 +239,66 @@ export default function ThreadScreen() {
         }
     }, [transcriptBuffer]);
 
+    useEffect(() => {
+        lastJumpedMessageIdRef.current = null;
+        setHighlightedMessageId(null);
+    }, [id, targetMessageId]);
+
+    useEffect(() => {
+        if (!targetMessageId || messages.length === 0) return;
+        if (lastJumpedMessageIdRef.current === targetMessageId) return;
+
+        const targetIndex = messages.findIndex((message) => message.id === targetMessageId);
+        if (targetIndex < 0) return;
+
+        lastJumpedMessageIdRef.current = targetMessageId;
+        setHighlightedMessageId(targetMessageId);
+
+        const scrollIndex = Math.max(0, targetIndex - 1);
+        requestAnimationFrame(() => {
+            flashListRef.current?.scrollToIndex({ index: scrollIndex, animated: true });
+        });
+
+        const clearHighlightTimeout = setTimeout(() => {
+            if (!isMountedRef.current) return;
+            setHighlightedMessageId((current) => (
+                current === targetMessageId ? null : current
+            ));
+        }, 3500);
+
+        return () => clearTimeout(clearHighlightTimeout);
+    }, [messages, targetMessageId]);
+
     useSpeechRecognitionEvent('result', (event) => {
         if (event.results && event.results.length > 0) {
             const result = event.results[event.results.length - 1];
             if (result && result.transcript) {
                 setTranscriptBuffer(result.transcript);
-                setMicStatus('Heard: ' + result.transcript.substring(0, 15) + '...');
+                setMicStatus('Voice captured');
             }
         }
     });
 
     useSpeechRecognitionEvent('speechstart', () => {
         setIsRecording(true);
-        setMicStatus('Listening...');
+        setMicStatus('Listening…');
     });
     useSpeechRecognitionEvent('speechend', () => {
         setIsRecording(false);
-        setMicStatus('Processing...');
+        setMicStatus('Transcribing…');
     });
     useSpeechRecognitionEvent('error', (event) => {
         console.error('Speech error:', event);
         setIsRecording(false);
-        setMicStatus('Error: ' + event.error + ' - ' + event.message);
+        setMicStatus('Voice input unavailable');
         if (event.error === 'not-allowed') {
             Alert.alert('Permission Required', 'Please enable microphone access in Settings.');
         }
     });
 
     const sendMessage = async () => {
-        if (!id || !inputText.trim() || isLoading || !!inFlightTurnIdRef.current) return;
+        if (!id || !inputText.trim()) return;
+        if (isLoading || !!inFlightTurnIdRef.current) return;
 
         const userMessage = inputText.trim();
         const refreshTargetCount = Math.max(MESSAGE_PAGE_SIZE, loadedMessageCount + 4);
@@ -243,6 +313,7 @@ export default function ThreadScreen() {
         setInputText('');
         setTranscriptBuffer('');
         setIsLoading(true);
+        setLlmInitError(null);
 
         console.log('[ThreadTurn] start', {
             turnId,
@@ -259,12 +330,12 @@ export default function ThreadScreen() {
                     console.error('[ThreadTurn] stop recording failed', { turnId, error: e?.message });
                 } finally {
                     setIsRecording(false);
-                    setMicStatus('Stopped');
+                    setMicStatus('Microphone ready');
                 }
             }
 
             turnStage = 'persist_user_message';
-            await MessageRepo.create(id, 'user', userMessage);
+            await MessageRepo.create(id, 'user', userMessage, { turnId });
             userMessagePersisted = true;
             await refreshLoadedMessages(refreshTargetCount);
 
@@ -275,6 +346,9 @@ export default function ThreadScreen() {
             await LLMService.init(activeProvider);
             if (!llmReady && isMountedRef.current) {
                 setLlmReady(true);
+            }
+            if (isMountedRef.current) {
+                setLlmInitError(null);
             }
 
             turnStage = 'build_memory_context';
@@ -347,8 +421,8 @@ export default function ThreadScreen() {
                     await MessageRepo.create(
                         id,
                         'assistant',
-                        'I ran into a temporary issue while generating a reply. Please try again.',
-                        { turnId, fallback: true, stage: turnStage }
+                        'I hit a temporary issue while replying. Please try again in a moment.',
+                        { turnId, fallback: true, stage: turnStage, provider: activeProvider }
                     );
                     await refreshLoadedMessages(refreshTargetCount);
                     assistantMessagePersisted = true;
@@ -360,7 +434,20 @@ export default function ThreadScreen() {
                 }
             }
 
-            Alert.alert('Reply Unavailable', getUserFacingTurnError());
+            if (!userMessagePersisted && isMountedRef.current) {
+                setInputText(userMessage);
+            }
+
+            if (turnStage === 'resolve_provider' || turnStage === 'init_provider') {
+                if (isMountedRef.current) {
+                    setLlmReady(false);
+                    setLlmInitError('AI is unavailable. Check provider and model setup in Settings.');
+                }
+            }
+
+            if (isMountedRef.current) {
+                Alert.alert('Reply Unavailable', getUserFacingTurnError(turnStage));
+            }
         } finally {
             if (inFlightTurnIdRef.current === turnId) {
                 inFlightTurnIdRef.current = null;
@@ -379,24 +466,24 @@ export default function ThreadScreen() {
         if (isRecording) {
             try {
                 await ExpoSpeechRecognitionModule.stop();
-                setMicStatus('Stopped');
+                setMicStatus('Microphone ready');
             } catch (e: any) {
                 console.error('Stop error:', e);
-                setMicStatus('Stop error: ' + e.message);
+                setMicStatus('Could not stop microphone');
             }
             setIsRecording(false);
         } else {
             try {
-                setMicStatus('Requesting perms...');
+                setMicStatus('Checking microphone permission…');
                 const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
                 if (!result.granted) {
                     Alert.alert('Permission Required', 'Please allow microphone and speech recognition access.');
-                    setMicStatus('Perm denied');
+                    setMicStatus('Microphone permission denied');
                     return;
                 }
                 setTranscriptBuffer('');
                 setIsRecording(true);
-                setMicStatus('Starting...');
+                setMicStatus('Starting microphone…');
 
                 await ExpoSpeechRecognitionModule.start({
                     lang: speechLang,
@@ -409,7 +496,7 @@ export default function ThreadScreen() {
             } catch (e: any) {
                 console.error('Start error:', e);
                 setIsRecording(false);
-                setMicStatus('Start error: ' + e.message);
+                setMicStatus('Could not start microphone');
                 Alert.alert('Error', 'Could not start speech recognition.');
             }
         }
@@ -418,9 +505,14 @@ export default function ThreadScreen() {
     const renderItem = ({ item }: { item: Message }) => {
         const isUser = item.role === 'user';
         const displayText = isUser ? item.text : sanitizeAssistantResponse(item.text);
+        const isHighlighted = highlightedMessageId === item.id;
         return (
             <View style={[styles.bubbleWrapper, isUser ? styles.userWrapper : styles.assistantWrapper]}>
-                <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+                <View style={[
+                    styles.bubble,
+                    isUser ? styles.userBubble : styles.assistantBubble,
+                    isHighlighted && styles.highlightedBubble
+                ]}>
                     <Text style={isUser ? styles.userText : styles.assistantText}>{displayText}</Text>
                     <Text style={styles.bubbleMeta}>{item.role}</Text>
                 </View>
@@ -487,6 +579,7 @@ export default function ThreadScreen() {
 
     const renderListHeader = () => {
         if (totalMessageCount === 0) return null;
+        const remaining = Math.max(0, totalMessageCount - loadedMessageCount);
 
         return (
             <View style={styles.historyHeader}>
@@ -499,7 +592,7 @@ export default function ThreadScreen() {
                         {loadingOlderMessages ? (
                             <ActivityIndicator size="small" color={Colors.primary} />
                         ) : (
-                            <Text style={styles.loadOlderText}>Load Older Messages</Text>
+                            <Text style={styles.loadOlderText}>Load older messages ({remaining} left)</Text>
                         )}
                     </TouchableOpacity>
                 ) : (
@@ -538,54 +631,74 @@ export default function ThreadScreen() {
                         </View>
                     ) : (
                         <FlashList
+                            ref={flashListRef}
                             data={messages}
                             renderItem={renderItem}
                             contentContainerStyle={{ padding: 16 }}
                             ListHeaderComponent={renderListHeader}
-                            ListEmptyComponent={<Text style={styles.emptyText}>No messages yet.</Text>}
+                            ListEmptyComponent={<Text style={styles.emptyText}>No messages yet. Start the conversation below.</Text>}
                         />
                     )}
                 </View>
                 <View style={styles.inputContainer}>
-                    <TextInput
-                        style={styles.input}
-                        value={inputText}
-                        onChangeText={setInputText}
-                        placeholder={isRecording ? `Listening... ${micStatus}` : 'Type or tap mic...'}
-                        placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
-                        multiline
-                        editable={!isLoading}
-                    />
-                    {micStatus !== 'Idle' && (
+                    {!!llmInitError && (
+                        <View style={styles.llmErrorBanner}>
+                            <Text style={styles.llmErrorText}>{llmInitError}</Text>
+                            <TouchableOpacity onPress={() => router.push('/(tabs)/settings')}>
+                                <Text style={styles.llmErrorAction}>Open Settings</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                    {isLoading && (
+                        <Text style={styles.turnStatusText}>Generating reply…</Text>
+                    )}
+                    {micStatus !== 'Microphone ready' && (
                         <Text style={styles.micStatusText}>{micStatus}</Text>
                     )}
-                    <TouchableOpacity
-                        onPress={toggleLanguage}
-                        style={styles.langButton}
-                        disabled={isLoading}
-                    >
-                        <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={toggleRecording}
-                        style={[styles.micButton, isRecording && styles.micActive]}
-                        disabled={isLoading}
-                    >
-                        <Ionicons
-                            name={isRecording ? 'stop' : 'mic'}
-                            size={28}
-                            color={isRecording ? 'white' : (isLoading ? Colors.secondaryText : Colors.primary)}
+                    <View style={styles.composerRow}>
+                        <TextInput
+                            style={styles.input}
+                            value={inputText}
+                            onChangeText={setInputText}
+                            placeholder={
+                                isLoading
+                                    ? 'Generating reply…'
+                                    : isRecording
+                                        ? 'Listening…'
+                                        : 'Type a message or use the mic'
+                            }
+                            placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
+                            multiline
+                            editable={!isLoading}
                         />
-                    </TouchableOpacity>
-                    {isLoading ? (
-                        <View style={styles.sendButton}>
-                            <ActivityIndicator size="small" color={Colors.primary} />
-                        </View>
-                    ) : inputText.length > 0 && (
-                        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
-                            <Ionicons name="send" size={28} color={Colors.primary} />
+                        <TouchableOpacity
+                            onPress={toggleLanguage}
+                            style={styles.langButton}
+                            disabled={isLoading}
+                        >
+                            <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
                         </TouchableOpacity>
-                    )}
+                        <TouchableOpacity
+                            onPress={toggleRecording}
+                            style={[styles.micButton, isRecording && styles.micActive]}
+                            disabled={isLoading}
+                        >
+                            <Ionicons
+                                name={isRecording ? 'stop' : 'mic'}
+                                size={28}
+                                color={isRecording ? 'white' : (isLoading ? Colors.secondaryText : Colors.primary)}
+                            />
+                        </TouchableOpacity>
+                        {isLoading ? (
+                            <View style={styles.sendButton}>
+                                <ActivityIndicator size="small" color={Colors.primary} />
+                            </View>
+                        ) : inputText.trim().length > 0 && (
+                            <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
+                                <Ionicons name="send" size={28} color={Colors.primary} />
+                            </TouchableOpacity>
+                        )}
+                    </View>
                 </View>
             </KeyboardAvoidingView>
 
@@ -681,13 +794,39 @@ const styles = StyleSheet.create({
         color: Colors.secondaryText
     },
     inputContainer: {
-        flexDirection: 'row',
         padding: 12,
         paddingBottom: 10,
         backgroundColor: Colors.card,
         borderTopWidth: 1,
-        borderTopColor: Colors.border,
+        borderTopColor: Colors.border
+    },
+    composerRow: {
+        flexDirection: 'row',
         alignItems: 'flex-end'
+    },
+    llmErrorBanner: {
+        backgroundColor: '#FEF2F2',
+        borderWidth: 1,
+        borderColor: '#FECACA',
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        marginBottom: 8
+    },
+    llmErrorText: {
+        color: '#991B1B',
+        fontSize: 12
+    },
+    llmErrorAction: {
+        marginTop: 4,
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
+    },
+    turnStatusText: {
+        fontSize: 12,
+        color: Colors.secondaryText,
+        marginBottom: 6
     },
     input: {
         flex: 1,
@@ -702,11 +841,9 @@ const styles = StyleSheet.create({
         color: Colors.text,
     },
     micStatusText: {
-        fontSize: 10,
+        fontSize: 11,
         color: Colors.secondaryText,
-        position: 'absolute',
-        top: -15,
-        left: 12
+        marginBottom: 6
     },
     sendButton: {
         padding: 10,
@@ -759,12 +896,16 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: Colors.border
     },
+    highlightedBubble: {
+        borderColor: Colors.primary,
+        borderWidth: 2
+    },
     userText: {
         color: '#fff',
         fontSize: 16,
     },
     assistantText: {
-        color: '#000',
+        color: Colors.text,
         fontSize: 16,
     },
     bubbleMeta: {

@@ -12,6 +12,7 @@ export default function SettingsScreen() {
     const [activeProvider, setActiveProvider] = useState<AIProviderType>('local');
     const [providerStatuses, setProviderStatuses] = useState<AIProviderStatus[]>([]);
     const [switchingProvider, setSwitchingProvider] = useState<AIProviderType | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const [activeModel, setActiveModel] = useState<ModelSetting | null>(null);
     const [installedModels, setInstalledModels] = useState<ModelSetting[]>([]);
@@ -29,6 +30,7 @@ export default function SettingsScreen() {
     const loadData = async () => {
         try {
             setLoading(true);
+            setLoadError(null);
             const [
                 selectedProvider,
                 statuses,
@@ -49,6 +51,7 @@ export default function SettingsScreen() {
             setAvailableModels(all);
         } catch (error) {
             console.error('Error loading model data:', error);
+            setLoadError('Could not refresh settings. Try again.');
         } finally {
             setLoading(false);
         }
@@ -56,6 +59,16 @@ export default function SettingsScreen() {
 
     const getProviderStatus = (provider: AIProviderType): AIProviderStatus | undefined => {
         return providerStatuses.find((item) => item.provider === provider);
+    };
+
+    const getProviderBadgeLabel = (
+        status: AIProviderStatus | undefined,
+        isActive: boolean
+    ): string => {
+        if (isActive && status?.available === false) return 'Selected · Unavailable';
+        if (isActive) return 'Selected';
+        if (status?.available) return 'Available';
+        return 'Unavailable';
     };
 
     const handleSwitchProvider = async (provider: AIProviderType) => {
@@ -180,6 +193,7 @@ export default function SettingsScreen() {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading settings…</Text>
             </View>
         );
     }
@@ -187,9 +201,18 @@ export default function SettingsScreen() {
     return (
         <ScrollView style={styles.container}>
             <Text style={styles.header}>Settings</Text>
+            {!!loadError && (
+                <View style={styles.inlineWarningRow}>
+                    <Text style={styles.inlineWarning}>{loadError}</Text>
+                    <TouchableOpacity onPress={loadData}>
+                        <Text style={styles.inlineWarningAction}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             <View style={styles.section}>
                 <Text style={styles.sectionHeader}>AI Provider</Text>
+                <Text style={styles.smallText}>Current provider: {activeProvider === 'cloud' ? 'OpenAI Cloud (Proxy)' : 'Local (On-device)'}</Text>
                 {[
                     {
                         id: 'local' as AIProviderType,
@@ -213,14 +236,18 @@ export default function SettingsScreen() {
                                 <Text style={styles.providerName}>{option.name}</Text>
                                 <View style={[
                                     styles.providerBadge,
-                                    isActive ? styles.providerBadgeActive : (
+                                    isActive && status?.available === false
+                                        ? styles.providerBadgeUnavailable
+                                        : isActive
+                                            ? styles.providerBadgeActive
+                                            : (
                                         status?.available
                                             ? styles.providerBadgeAvailable
                                             : styles.providerBadgeUnavailable
                                     )
                                 ]}>
                                     <Text style={styles.providerBadgeText}>
-                                        {isActive ? 'Selected' : status?.available ? 'Available' : 'Unavailable'}
+                                        {getProviderBadgeLabel(status, isActive)}
                                     </Text>
                                 </View>
                             </View>
@@ -242,7 +269,9 @@ export default function SettingsScreen() {
                                     {switchingProvider === option.id ? (
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
-                                        <Text style={styles.providerSwitchButtonText}>Use Provider</Text>
+                                        <Text style={styles.providerSwitchButtonText}>
+                                            {option.id === 'cloud' ? 'Switch to Cloud' : 'Switch to Local'}
+                                        </Text>
                                     )}
                                 </TouchableOpacity>
                             )}
@@ -273,7 +302,7 @@ export default function SettingsScreen() {
                 )}
                 {activeProvider === 'cloud' && (
                     <Text style={styles.smallText}>
-                        Cloud provider is selected. Local models remain available for offline fallback.
+                        Cloud is selected. Local models stay installed for offline fallback.
                     </Text>
                 )}
             </View>
@@ -389,11 +418,31 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: Colors.background
     },
+    loadingText: {
+        marginTop: 10,
+        color: Colors.secondaryText
+    },
     header: {
         fontSize: 24,
         fontWeight: 'bold',
         marginBottom: 20,
         marginTop: 10
+    },
+    inlineWarning: {
+        flex: 1,
+        color: Colors.notification,
+        fontSize: 12
+    },
+    inlineWarningRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 10
+    },
+    inlineWarningAction: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     section: {
         backgroundColor: Colors.card,

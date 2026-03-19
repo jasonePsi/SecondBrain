@@ -60,6 +60,7 @@ export default function SearchScreen() {
     const [spaces, setSpaces] = useState<Space[]>([]);
     const [threads, setThreads] = useState<Thread[]>([]);
     const [messages, setMessages] = useState<MessageSearchHit[]>([]);
+    const [messageThreadTitles, setMessageThreadTitles] = useState<Record<string, string>>({});
     const [isSearching, setIsSearching] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const searchTokenRef = useRef(0);
@@ -78,6 +79,7 @@ export default function SearchScreen() {
                 setSpaces([]);
                 setThreads([]);
                 setMessages([]);
+                setMessageThreadTitles({});
                 setError(null);
                 return;
             }
@@ -91,14 +93,21 @@ export default function SearchScreen() {
                     ThreadRepo.search(debouncedQuery),
                     MessageRepo.searchSmart(debouncedQuery, 24)
                 ]);
+                const messageThreadIds = [...new Set(messageRows.map((message) => message.thread_id))];
+                const messageThreads = await ThreadRepo.getByIds(messageThreadIds);
+                const nextMessageThreadTitles = messageThreads.reduce<Record<string, string>>((acc, thread) => {
+                    acc[thread.id] = thread.title;
+                    return acc;
+                }, {});
 
                 if (searchToken !== searchTokenRef.current) return;
                 setSpaces(rankByStartsWith(spaceRows, debouncedQuery, (item) => item.name));
                 setThreads(rankByStartsWith(threadRows, debouncedQuery, (item) => item.title));
                 setMessages(messageRows);
+                setMessageThreadTitles(nextMessageThreadTitles);
             } catch (err: any) {
                 if (searchToken !== searchTokenRef.current) return;
-                setError(err?.message || 'Search failed.');
+                setError(err?.message || 'Search is temporarily unavailable.');
             } finally {
                 if (searchToken !== searchTokenRef.current) return;
                 setIsSearching(false);
@@ -143,16 +152,16 @@ export default function SearchScreen() {
                 data: messages.map((message) => ({
                     type: 'message',
                     id: message.id,
-                    title: toMessageTitle(message),
-                    subtitle: `Message (${message.role})`,
+                title: toMessageTitle(message),
+                    subtitle: `${message.role === 'assistant' ? 'Assistant message' : 'Your message'} • ${messageThreadTitles[message.thread_id] || 'Thread'}`,
                     snippet: message.snippet,
-                    navigateTo: `/thread/${message.thread_id}`
+                    navigateTo: `/thread/${message.thread_id}?messageId=${encodeURIComponent(message.id)}`
                 }))
             });
         }
 
         return nextSections;
-    }, [spaces, threads, messages]);
+    }, [spaces, threads, messages, messageThreadTitles]);
 
     const getIconForType = (
         type: SearchType
@@ -214,7 +223,11 @@ export default function SearchScreen() {
             </View>
 
             {!!error && (
-                <Text style={styles.errorText}>Search warning: {error}</Text>
+                <Text style={styles.errorText}>Search is unavailable right now. {error}</Text>
+            )}
+
+            {isSearching && debouncedQuery.length > 0 && (
+                <Text style={styles.searchingText}>Searching…</Text>
             )}
 
             {!debouncedQuery && (
@@ -228,7 +241,7 @@ export default function SearchScreen() {
             {!!debouncedQuery && !isSearching && sections.length === 0 && (
                 <View style={styles.emptyState}>
                     <Text style={styles.emptyTitle}>No results</Text>
-                    <Text style={styles.emptyText}>No matches for "{debouncedQuery}".</Text>
+                    <Text style={styles.emptyText}>No matches for "{debouncedQuery}". Try a broader phrase.</Text>
                 </View>
             )}
 
@@ -279,6 +292,12 @@ const styles = StyleSheet.create({
         marginHorizontal: 16,
         marginBottom: 6,
         color: Colors.notification,
+        fontSize: 12
+    },
+    searchingText: {
+        marginHorizontal: 16,
+        marginBottom: 4,
+        color: Colors.secondaryText,
         fontSize: 12
     },
     listContent: {

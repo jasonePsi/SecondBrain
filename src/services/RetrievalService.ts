@@ -1,5 +1,5 @@
 import { Message, MessageRepo } from '../repositories/message_repo';
-import { scoreMessage, tokenize } from './retrieval_utils';
+import { rankOlderCandidates, scoreMessage, tokenize } from './retrieval_utils';
 
 const DEFAULT_RECENT_OFFSET = 12;
 const DEFAULT_CANDIDATE_LIMIT = 180;
@@ -36,30 +36,19 @@ export const RetrievalService = {
         }
 
         const olderCandidates = await MessageRepo.listOlderByThread(threadId, recentOffset, candidateLimit);
-        const filteredCandidates = olderCandidates.filter((message) => {
-            if (excludeMessageIds.has(message.id)) return false;
-            if (message.role === 'system') return false;
-            return message.text.trim().length > 0;
-        });
-
-        const ranked = filteredCandidates
-            .map((message) => scoreMessage(message, query, queryTokens))
-            .filter((item) => item.overlap > 0)
-            .sort((a, b) => {
-                if (b.score !== a.score) return b.score - a.score;
-                if (b.message.created_at !== a.message.created_at) {
-                    return b.message.created_at - a.message.created_at;
-                }
-                return a.message.id.localeCompare(b.message.id);
-            })
-            .slice(0, maxResults)
-            .sort((a, b) => a.message.created_at - b.message.created_at);
+        const ranked = rankOlderCandidates(
+            olderCandidates,
+            query,
+            queryTokens,
+            excludeMessageIds,
+            maxResults
+        );
 
         console.log('[RetrievalService] older retrieval', {
             turnId: options?.turnId,
             threadId,
             queryTokens: queryTokens.length,
-            candidates: filteredCandidates.length,
+            candidates: olderCandidates.length,
             selected: ranked.length
         });
 
@@ -73,5 +62,6 @@ export const RetrievalService = {
 
 export const __retrievalTestUtils = {
     tokenize,
-    scoreMessage
+    scoreMessage,
+    rankOlderCandidates
 };

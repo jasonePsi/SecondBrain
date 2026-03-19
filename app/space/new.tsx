@@ -9,16 +9,19 @@ export default function NewSpaceScreen() {
     const [name, setName] = useState('');
     const router = useRouter();
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const handleCreate = async () => {
         if (!name.trim()) return;
         setIsSubmitting(true);
+        setError(null);
         try {
             const id = await SpaceRepo.create(name.trim());
             await FeedRepo.create(id, 'space_created', id);
             router.back();
         } catch (e) {
             console.error(e);
+            setError('Could not create this space. Please try again.');
         } finally {
             setIsSubmitting(false);
         }
@@ -40,13 +43,14 @@ export default function NewSpaceScreen() {
                     placeholder="e.g., Work, Personal, Project X"
                     autoFocus
                 />
+                {!!error && <Text style={styles.errorText}>{error}</Text>}
 
                 <TouchableOpacity
                     style={[styles.button, !name.trim() && styles.buttonDisabled]}
                     onPress={handleCreate}
                     disabled={!name.trim() || isSubmitting}
                 >
-                    <Text style={styles.buttonText}>Create Space</Text>
+                    <Text style={styles.buttonText}>{isSubmitting ? 'Creating…' : 'Create Space'}</Text>
                 </TouchableOpacity>
             </View>
         </KeyboardAvoidingView>
@@ -89,5 +93,10 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 16,
         fontWeight: '600'
+    },
+    errorText: {
+        marginBottom: 12,
+        color: Colors.notification,
+        fontSize: 13
     }
 });
