@@ -1,11 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  derivePostProcessingOutcome,
+  emptyExtractionResult,
   emptyExecutionReport,
   emptySummaryResult,
   extractionExceptionResult,
   opsExecutionFailureReport
 } from '../src/services/turn_post_processing_utils.ts';
+
+test('emptyExtractionResult returns no-op extraction baseline', () => {
+  const extraction = emptyExtractionResult();
+  assert.equal(extraction.raw, '');
+  assert.equal(extraction.ops.length, 0);
+  assert.equal(extraction.parseError, undefined);
+  assert.equal(extraction.diagnostics.rawOpsCount, 0);
+});
 
 test('emptyExecutionReport returns zeroed counters and no logs', () => {
   const report = emptyExecutionReport();
@@ -35,4 +45,19 @@ test('emptySummaryResult returns no-op summary state', () => {
   assert.equal(summary.updated, false);
   assert.equal(summary.summaryLength, 0);
   assert.equal(summary.messageCount, 0);
+});
+
+test('derivePostProcessingOutcome marks degraded only for parse/ops failures', () => {
+  assert.equal(
+    derivePostProcessingOutcome({ parseError: undefined, failedCount: 0 }),
+    'ok'
+  );
+  assert.equal(
+    derivePostProcessingOutcome({ parseError: 'bad json', failedCount: 0 }),
+    'degraded'
+  );
+  assert.equal(
+    derivePostProcessingOutcome({ parseError: undefined, failedCount: 2 }),
+    'degraded'
+  );
 });

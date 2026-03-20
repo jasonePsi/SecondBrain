@@ -23,7 +23,8 @@ export default function SpacesScreen() {
       const data = await SpaceRepo.getAll();
       setSpaces(data);
     } catch (err: any) {
-      setError(err?.message || 'Could not load spaces.');
+      console.error('Failed to load spaces:', err);
+      setError('Could not load spaces right now.');
     } finally {
       setLoading(false);
     }
@@ -196,12 +197,27 @@ export default function SpacesScreen() {
           ) : (
             <View style={styles.centerState}>
               <Text style={styles.empty}>No spaces yet. Create one to get started.</Text>
+              <TouchableOpacity style={styles.emptyActionButton} onPress={() => router.push('/space/new')}>
+                <Text style={styles.emptyActionText}>Create Space</Text>
+              </TouchableOpacity>
             </View>
           )
         )}
-        ListHeaderComponent={error ? (
-          <Text style={styles.inlineError}>Could not refresh spaces: {error}</Text>
-        ) : null}
+        ListHeaderComponent={(
+          <View>
+            {!!error && (
+              <View style={styles.inlineWarningRow}>
+                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                <TouchableOpacity onPress={loadSpaces}>
+                  <Text style={styles.inlineWarningAction}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {isEditing && (
+              <Text style={styles.inlineHint}>Editing enabled: reorder, rename, or delete spaces. Tap ✓ when done.</Text>
+            )}
+          </View>
+        )}
       />
       {!isEditing && <CaptureFAB onPress={() => router.push('/space/new')} />}
 
@@ -215,6 +231,7 @@ export default function SpacesScreen() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Rename Space</Text>
+              <Text style={styles.modalSubtitle}>Use a short name you can quickly find in search.</Text>
               <TextInput
                 style={styles.modalInput}
                 value={renameValue}
@@ -290,6 +307,18 @@ const styles = StyleSheet.create({
     marginTop: 40,
     alignItems: 'center'
   },
+  emptyActionButton: {
+    marginTop: 12,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  emptyActionText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
   fullState: {
     flex: 1,
     alignItems: 'center',
@@ -297,10 +326,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24
   },
   inlineError: {
+    flex: 1,
     color: Colors.notification,
     fontSize: 12,
+    marginTop: 8
+  },
+  inlineWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginHorizontal: 16,
-    marginTop: 8,
+    marginBottom: 4
+  },
+  inlineWarningAction: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  inlineHint: {
+    color: Colors.secondaryText,
+    fontSize: 12,
+    marginHorizontal: 16,
+    marginTop: 2,
     marginBottom: 4
   },
   errorStateText: {
@@ -342,8 +389,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 12,
+    marginBottom: 4,
     color: Colors.text
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: Colors.secondaryText,
+    marginBottom: 10
   },
   modalInput: {
     borderWidth: 1,

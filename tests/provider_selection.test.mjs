@@ -9,5 +9,8 @@ test('resolveProviderFromSetting accepts valid provider ids', () => {
 
 test('resolveProviderFromSetting falls back for invalid values', () => {
   assert.equal(resolveProviderFromSetting('invalid', 'local'), 'local');
+  assert.equal(resolveProviderFromSetting(' Local ', 'cloud'), 'cloud');
+  assert.equal(resolveProviderFromSetting('CLOUD', 'local'), 'local');
   assert.equal(resolveProviderFromSetting(null, 'cloud'), 'cloud');
+  assert.equal(resolveProviderFromSetting(undefined, 'local'), 'local');
 });

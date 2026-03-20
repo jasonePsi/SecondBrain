@@ -36,7 +36,8 @@ export default function BrainScreen() {
             const next = await BrainService.getSnapshot();
             setSnapshot(next);
         } catch (err: any) {
-            setError(err?.message || 'Could not load memory right now.');
+            console.error('Brain refresh failed:', err);
+            setError('Could not refresh memory right now.');
         } finally {
             setLoading(false);
         }
@@ -155,9 +156,17 @@ export default function BrainScreen() {
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-            <Text style={styles.header}>Brain</Text>
+            <View style={styles.headerRow}>
+                <Text style={styles.header}>Brain</Text>
+                <TouchableOpacity onPress={loadSnapshot} style={styles.refreshButton}>
+                    <Text style={styles.refreshButtonText}>Refresh</Text>
+                </TouchableOpacity>
+            </View>
             <Text style={styles.subtitle}>
-                Structured memory from your conversations.
+                Structured memory captured from your conversations.
+            </Text>
+            <Text style={styles.subtitleHint}>
+                Tap any card to open the related thread or space.
             </Text>
             <Text style={styles.subtitleMeta}>
                 {entities.length} entities · {facts.length} facts · {actions.length} open action(s)
@@ -165,31 +174,52 @@ export default function BrainScreen() {
             {!!snapshot?.loadedAt && (
                 <Text style={styles.loadedAt}>Last refreshed {formatTimestamp(snapshot.loadedAt)}</Text>
             )}
+            {loading && !!snapshot && (
+                <Text style={styles.loadingInline}>Refreshing memory…</Text>
+            )}
+            {!!error && (
+                <View style={styles.inlineWarningRow}>
+                    <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                    <TouchableOpacity onPress={loadSnapshot}>
+                        <Text style={styles.inlineWarningAction}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+            {entities.length === 0 && facts.length === 0 && actions.length === 0 && (
+                <View style={styles.globalEmptyCard}>
+                    <Text style={styles.globalEmptyTitle}>Memory is empty for now</Text>
+                    <Text style={styles.globalEmptyText}>
+                        Start a conversation in a space and capture a few facts or reminders. They will appear here automatically.
+                    </Text>
+                    <TouchableOpacity
+                        style={styles.globalEmptyAction}
+                        onPress={() => router.push('/(tabs)/spaces')}
+                    >
+                        <Text style={styles.globalEmptyActionText}>Go to Spaces</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Entities</Text>
+                <Text style={styles.sectionTitle}>Entities ({entities.length})</Text>
                 {entities.length === 0
                     ? <Text style={styles.emptyText}>No entities yet. Keep chatting and memory extraction will populate this section.</Text>
                     : entities.map(renderEntity)}
             </View>
 
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Facts</Text>
+                <Text style={styles.sectionTitle}>Facts ({facts.length})</Text>
                 {facts.length === 0
                     ? <Text style={styles.emptyText}>No facts captured yet.</Text>
                     : facts.map(renderFact)}
             </View>
 
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Open Actions</Text>
+                <Text style={styles.sectionTitle}>Open Actions ({actions.length})</Text>
                 {actions.length === 0
                     ? <Text style={styles.emptyText}>No open reminders or tasks.</Text>
                     : actions.map(renderAction)}
             </View>
-
-            {!!error && (
-                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
-            )}
         </ScrollView>
     );
 }
@@ -234,10 +264,33 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: Colors.text
     },
+    headerRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+    },
+    refreshButton: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        backgroundColor: Colors.card,
+        borderWidth: 1,
+        borderColor: Colors.border
+    },
+    refreshButtonText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
+    },
     subtitle: {
         marginTop: 4,
         color: Colors.secondaryText,
         fontSize: 13
+    },
+    subtitleHint: {
+        marginTop: 2,
+        color: Colors.secondaryText,
+        fontSize: 12
     },
     subtitleMeta: {
         marginTop: 2,
@@ -248,6 +301,42 @@ const styles = StyleSheet.create({
         marginTop: 2,
         color: Colors.secondaryText,
         fontSize: 12
+    },
+    loadingInline: {
+        marginTop: 6,
+        color: Colors.secondaryText,
+        fontSize: 12
+    },
+    globalEmptyCard: {
+        marginTop: 12,
+        padding: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: Colors.border,
+        backgroundColor: Colors.card
+    },
+    globalEmptyTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: Colors.text
+    },
+    globalEmptyText: {
+        marginTop: 6,
+        fontSize: 12,
+        color: Colors.secondaryText
+    },
+    globalEmptyAction: {
+        marginTop: 10,
+        alignSelf: 'flex-start',
+        backgroundColor: Colors.primary,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6
+    },
+    globalEmptyActionText: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: '600'
     },
     section: {
         marginTop: 16,
@@ -333,8 +422,20 @@ const styles = StyleSheet.create({
         fontWeight: '600'
     },
     inlineError: {
-        marginTop: 14,
+        flex: 1,
         color: Colors.notification,
         fontSize: 12
+    },
+    inlineWarningRow: {
+        marginTop: 8,
+        marginBottom: 2,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10
+    },
+    inlineWarningAction: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     }
 });

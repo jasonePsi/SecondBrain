@@ -11,6 +11,8 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_REQUEST_TIMEOUT_MS = 25000;
 const MIN_REQUEST_TIMEOUT_MS = 1000;
 const MAX_REQUEST_TIMEOUT_MS = 120000;
+const REQUEST_ID_MAX_CHARS = 120;
+const ALLOWED_PRIVACY_MODES = new Set(['minimal', 'standard', 'debug']);
 
 const toBoolean = (value, defaultValue = false) => {
     if (typeof value !== 'string') return defaultValue;
@@ -27,6 +29,22 @@ const parsePositiveInteger = (value, fallback) => {
     return parsed;
 };
 
+const normalizeRequestId = (value) => {
+    if (typeof value !== 'string') return '';
+    const normalized = value.trim();
+    if (!normalized) return '';
+    if (normalized.length <= REQUEST_ID_MAX_CHARS) return normalized;
+    return normalized.slice(0, REQUEST_ID_MAX_CHARS);
+};
+
+const normalizePrivacyMode = (value, fallbackMode) => {
+    if (typeof value !== 'string') return fallbackMode;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallbackMode;
+    if (!ALLOWED_PRIVACY_MODES.has(normalized)) return fallbackMode;
+    return normalized;
+};
+
 const resolveConfig = (env = process.env) => ({
     openaiApiKey: env.OPENAI_API_KEY || '',
     assistantModel: env.OPENAI_ASSISTANT_MODEL || 'gpt-5.4',
@@ -37,7 +55,10 @@ const resolveConfig = (env = process.env) => ({
         env.OPENAI_PROXY_REQUEST_TIMEOUT_MS,
         DEFAULT_REQUEST_TIMEOUT_MS
     ),
-    defaultPrivacyMode: env.OPENAI_PROXY_DEFAULT_PRIVACY_MODE || 'minimal',
+    defaultPrivacyMode: typeof env.OPENAI_PROXY_DEFAULT_PRIVACY_MODE === 'string'
+        && env.OPENAI_PROXY_DEFAULT_PRIVACY_MODE.trim().length > 0
+        ? env.OPENAI_PROXY_DEFAULT_PRIVACY_MODE.trim().toLowerCase()
+        : 'minimal',
     defaultStore: toBoolean(env.OPENAI_PROXY_DEFAULT_STORE, false)
 });
 
@@ -66,8 +87,13 @@ const validateConfig = (config) => {
     if (typeof config.utilityModel !== 'string' || config.utilityModel.trim().length === 0) {
         errors.push('OPENAI_AUX_MODEL must be a non-empty string.');
     }
-    if (typeof config.defaultPrivacyMode !== 'string' || config.defaultPrivacyMode.trim().length === 0) {
-        warnings.push('OPENAI_PROXY_DEFAULT_PRIVACY_MODE is empty; using minimal privacy mode.');
+    if (
+        typeof config.defaultPrivacyMode !== 'string'
+        || !ALLOWED_PRIVACY_MODES.has(config.defaultPrivacyMode)
+    ) {
+        errors.push(
+            `OPENAI_PROXY_DEFAULT_PRIVACY_MODE must be one of: ${Array.from(ALLOWED_PRIVACY_MODES).join(', ')}.`
+        );
     }
     if (!config.openaiApiKey) {
         warnings.push('OPENAI_API_KEY is not configured; cloud endpoints will return PROXY_NOT_CONFIGURED.');
@@ -100,7 +126,7 @@ const selectModel = (task, config) => {
 const resolvePrivacy = (requestPrivacy, config) => {
     const privacy = requestPrivacy || {};
     return {
-        mode: privacy.mode || config.defaultPrivacyMode,
+        mode: normalizePrivacyMode(privacy.mode, config.defaultPrivacyMode),
         store: privacy.store === undefined ? config.defaultStore : Boolean(privacy.store)
     };
 };
@@ -119,17 +145,53 @@ const toResponsesInput = (messages) => {
 
 const sendError = (res, status, code, message, requestId) => {
     const resolvedRequestId = requestId || crypto.randomUUID();
+    const errorMessage = typeof message === 'string' && message.trim().length > 0
+        ? message.replace(/\s+/g, ' ').trim().slice(0, 240)
+        : 'Request failed';
     res.setHeader('x-request-id', resolvedRequestId);
     res.status(status).json({
         error: {
             code,
-            message
+            message: errorMessage
         },
         requestId: resolvedRequestId
     });
 };
 
+const toValidationMessage = (zodError, fallback) => {
+    const issue = zodError?.issues?.[0];
+    if (!issue) return fallback;
+    const path = Array.isArray(issue.path) && issue.path.length > 0
+        ? issue.path.join('.')
+        : 'request';
+    const issueMessage = typeof issue.message === 'string' ? issue.message : 'Invalid value';
+    return `${fallback}: ${path} ${issueMessage}`.trim();
+};
+
+const resolveRequestIdFromPayload = (req, res, payloadRequestId) => {
+    const normalizedPayloadRequestId = normalizeRequestId(payloadRequestId);
+    if (!normalizedPayloadRequestId) {
+        return req.requestId;
+    }
+
+    if (req.requestIdSource === 'header') {
+        if (req.requestId !== normalizedPayloadRequestId) {
+            console.warn('[openai-proxy] request id mismatch', {
+                requestId: req.requestId,
+                payloadRequestId: normalizedPayloadRequestId
+            });
+        }
+        return req.requestId;
+    }
+
+    req.requestId = normalizedPayloadRequestId;
+    req.requestIdSource = 'body';
+    res.setHeader('x-request-id', req.requestId);
+    return req.requestId;
+};
+
 const allowedRoleSchema = z.enum(['system', 'user', 'assistant']);
+const requestIdSchema = z.string().trim().min(1).max(REQUEST_ID_MAX_CHARS);
 const privacySchema = z.object({
     mode: z.string().optional(),
     store: z.boolean().optional()
@@ -141,14 +203,14 @@ const chatRequestSchema = z.object({
         content: z.string().min(1).max(12000)
     })).min(1).max(64),
     task: z.enum(['assistant', 'summary', 'title', 'extraction', 'ranking']).optional(),
-    requestId: z.string().optional(),
+    requestId: requestIdSchema.optional(),
     privacy: privacySchema
 });
 
 const extractRequestSchema = z.object({
     prompt: z.string().min(1).max(16000),
     task: z.enum(['assistant', 'summary', 'title', 'extraction', 'ranking']).optional(),
-    requestId: z.string().optional(),
+    requestId: requestIdSchema.optional(),
     privacy: privacySchema
 });
 
@@ -186,7 +248,7 @@ const extractionJsonSchema = {
 };
 
 const executeWithRetry = async (requestId, operation, config, options = {}) => {
-    const retries = options.retries ?? 1;
+    const retries = options.retries ?? 0;
     const operationName = options.operationName || 'openai_call';
     let lastError = null;
 
@@ -238,12 +300,11 @@ const createServerApp = (options = {}) => {
     app.use(cors());
 
     app.use((req, res, next) => {
-        const requestIdHeader = req.headers['x-request-id'];
-        const requestId = typeof requestIdHeader === 'string' && requestIdHeader.trim().length > 0
-            ? requestIdHeader.trim()
-            : crypto.randomUUID();
+        const requestIdHeader = normalizeRequestId(req.headers['x-request-id']);
+        const requestId = requestIdHeader || crypto.randomUUID();
 
         req.requestId = requestId;
+        req.requestIdSource = requestIdHeader ? 'header' : 'generated';
         res.setHeader('x-request-id', requestId);
         next();
     });
@@ -262,12 +323,18 @@ const createServerApp = (options = {}) => {
         );
     });
 
-    app.get('/health', (_req, res) => {
+    app.get('/health', (req, res) => {
         if (!openai) {
             res.status(200).json({
                 ok: false,
                 configured: false,
+                code: 'PROXY_NOT_CONFIGURED',
                 reason: 'OPENAI_API_KEY is not configured',
+                requestId: req.requestId,
+                privacyDefaults: {
+                    mode: config.defaultPrivacyMode,
+                    store: config.defaultStore
+                },
                 warnings: configValidation.warnings
             });
             return;
@@ -276,6 +343,8 @@ const createServerApp = (options = {}) => {
         res.status(200).json({
             ok: true,
             configured: true,
+            code: 'OK',
+            requestId: req.requestId,
             assistantModel: config.assistantModel,
             utilityModel: config.utilityModel,
             privacyDefaults: {
@@ -299,21 +368,34 @@ const createServerApp = (options = {}) => {
         }
 
         const parsed = chatRequestSchema.safeParse(req.body);
+        const payloadRequestId = req.body && typeof req.body === 'object'
+            ? req.body.requestId
+            : undefined;
+        resolveRequestIdFromPayload(req, res, payloadRequestId);
         if (!parsed.success) {
             sendError(
                 res,
                 400,
                 'INVALID_REQUEST',
-                'Invalid chat request payload',
+                toValidationMessage(parsed.error, 'Invalid chat request payload'),
                 req.requestId
             );
             return;
         }
 
         const payload = parsed.data;
+        resolveRequestIdFromPayload(req, res, payload.requestId);
         const task = payload.task || 'assistant';
         const privacy = resolvePrivacy(payload.privacy, config);
         const model = selectModel(task, config);
+        console.log('[openai-proxy] chat request', {
+            requestId: req.requestId,
+            task,
+            model,
+            messageCount: payload.messages.length,
+            privacyMode: privacy.mode,
+            privacyStore: privacy.store
+        });
 
         try {
             const completion = await executeWithRetry(
@@ -331,7 +413,7 @@ const createServerApp = (options = {}) => {
                     }
                 }),
                 config,
-                { operationName: 'chat_response' }
+                { operationName: 'chat_response', retries: 0 }
             );
 
             const text = typeof completion.output_text === 'string'
@@ -342,6 +424,12 @@ const createServerApp = (options = {}) => {
                 throw new Error('OpenAI returned an empty response');
             }
 
+            console.log('[openai-proxy] chat success', {
+                requestId: req.requestId,
+                task,
+                model,
+                outputChars: text.length
+            });
             res.status(200).json({
                 requestId: req.requestId,
                 model,
@@ -375,21 +463,34 @@ const createServerApp = (options = {}) => {
         }
 
         const parsed = extractRequestSchema.safeParse(req.body);
+        const payloadRequestId = req.body && typeof req.body === 'object'
+            ? req.body.requestId
+            : undefined;
+        resolveRequestIdFromPayload(req, res, payloadRequestId);
         if (!parsed.success) {
             sendError(
                 res,
                 400,
                 'INVALID_REQUEST',
-                'Invalid extraction request payload',
+                toValidationMessage(parsed.error, 'Invalid extraction request payload'),
                 req.requestId
             );
             return;
         }
 
         const payload = parsed.data;
+        resolveRequestIdFromPayload(req, res, payload.requestId);
         const task = payload.task || 'extraction';
         const privacy = resolvePrivacy(payload.privacy, config);
         const model = selectModel(task, config);
+        console.log('[openai-proxy] extract request', {
+            requestId: req.requestId,
+            task,
+            model,
+            promptChars: payload.prompt.length,
+            privacyMode: privacy.mode,
+            privacyStore: privacy.store
+        });
 
         try {
             const response = await executeWithRetry(
@@ -434,7 +535,7 @@ const createServerApp = (options = {}) => {
                     }
                 }),
                 config,
-                { operationName: 'extract_response' }
+                { operationName: 'extract_response', retries: 0 }
             );
 
             const raw = typeof response.output_text === 'string'
@@ -448,6 +549,12 @@ const createServerApp = (options = {}) => {
             const parsedJson = JSON.parse(raw);
             const validated = memoryOpsSchema.parse(parsedJson);
 
+            console.log('[openai-proxy] extract success', {
+                requestId: req.requestId,
+                task,
+                model,
+                opCount: Array.isArray(validated.ops) ? validated.ops.length : 0
+            });
             res.status(200).json({
                 requestId: req.requestId,
                 model,

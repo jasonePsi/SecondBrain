@@ -46,6 +46,7 @@ Core tables:
    - structured extraction (`StructuredExtractionService`)
    - operation execution (`OpsExecutor`)
    - summary update (`MemoryService.updateThreadSummaryIfNeeded`)
+   - deterministic stage orchestration via `runTurnPostProcessingPipeline()` in `src/services/turn_post_processing_utils.ts`
    - each stage degrades gracefully (extraction/ops/summary failures do not break reply persistence)
 
 ## Provider Architecture
@@ -65,7 +66,17 @@ Implementations:
 
 `backend-proxy` validates config at startup (host/port/timeout/model IDs), emits non-secret startup warnings, and returns stable error shapes with `error.code`, `error.message`, and `requestId`.
 
+Cloud health checks are traceable end-to-end via request IDs (`x-request-id` / `requestId`) and expose explicit status fields (`ok`, `configured`, `code`, `reason`).
+For chat/extraction endpoints, request IDs can be supplied in either header or body; header IDs remain canonical when both are present.
+Settings surfaces provider detail codes and request traces when cloud availability checks fail.
+
 Cloud provider error handling normalizes proxy failures into stable, user-safe messages.
+
+Retry policy is conservative:
+- mobile provider retries chat transport failures once
+- mobile provider does not retry known non-retryable proxy failures (for example config/request errors)
+- mobile provider does not retry extraction calls
+- proxy does not retry upstream OpenAI calls by default
 
 Provider selection is persisted in `app_settings` (`active_ai_provider`) and managed from Settings.
 
@@ -102,10 +113,12 @@ App-side:
 - `npm run typecheck`
 - `npm test`
 - `npm run verify`
+- `npm run verify:all` (release gate: app checks + proxy verify)
 
 Proxy-side:
 
 - `npm --prefix backend-proxy run verify` (syntax + smoke tests)
+- smoke tests cover health/config parity, invalid payload/JSON shaping, request-id propagation, and privacy defaults/overrides across chat + extract
 
 ## Feed and Brain Product Surfaces
 

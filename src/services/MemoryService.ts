@@ -25,6 +25,12 @@ const MAX_MEMORY_BLOCK_CHARS = 2200;
 const MAX_CONTEXT_MESSAGE_CHARS = 380;
 const MAX_TOTAL_CONTEXT_CHARS = 6000;
 
+interface BuiltMemoryBlock {
+    text: string;
+    rawChars: number;
+    clipped: boolean;
+}
+
 const formatFactValue = (fact: Fact): string => {
     const parsed = safeJsonParse<any>(fact.value_json, fact.value_json);
     let rendered: string;
@@ -47,9 +53,12 @@ const formatFactValue = (fact: Fact): string => {
 const formatActionLine = (action: Action): string => {
     const payload = parseActionPayload<{ text?: string }>(action, {});
     const text = payload.text?.trim() || action.type;
-    const when = action.scheduled_for
-        ? new Date(action.scheduled_for).toLocaleString()
-        : 'unscheduled';
+    const when = (() => {
+        if (!action.scheduled_for) return 'unscheduled';
+        const date = new Date(action.scheduled_for);
+        if (Number.isNaN(date.getTime())) return 'unscheduled';
+        return date.toISOString();
+    })();
     return `[${action.type}] ${clipText(text, 80)} @ ${when}`;
 };
 
@@ -64,6 +73,20 @@ const dedupeLatestFactsByKey = (facts: Fact[], maxItems: number): Fact[] => {
         if (selected.length >= maxItems) break;
     }
     return selected;
+};
+
+const sortActionsForContext = (actions: Action[]): Action[] => {
+    return [...actions].sort((left, right) => {
+        const leftScheduled = left.scheduled_for ?? Number.MAX_SAFE_INTEGER;
+        const rightScheduled = right.scheduled_for ?? Number.MAX_SAFE_INTEGER;
+        if (leftScheduled !== rightScheduled) {
+            return leftScheduled - rightScheduled;
+        }
+        if (left.created_at !== right.created_at) {
+            return left.created_at - right.created_at;
+        }
+        return left.id.localeCompare(right.id);
+    });
 };
 
 const toContextMessage = (message: Message): ChatMessage | null => {
@@ -86,7 +109,7 @@ const buildMemoryBlock = (context: {
     globalFacts: Fact[];
     openActions: Action[];
     olderMessageHits: RetrievedMessageHit[];
-}): string => {
+}): BuiltMemoryBlock => {
     const lines: string[] = [];
 
     if (context.summary) {
@@ -133,7 +156,12 @@ const buildMemoryBlock = (context: {
     }
 
     const block = lines.join('\n').trim();
-    return clipText(block, MAX_MEMORY_BLOCK_CHARS);
+    const clippedBlock = clipText(block, MAX_MEMORY_BLOCK_CHARS);
+    return {
+        text: clippedBlock,
+        rawChars: block.length,
+        clipped: clippedBlock.length < block.length
+    };
 };
 
 const buildSummaryPrompt = (
@@ -239,9 +267,14 @@ export const MemoryService = {
         const threadFacts = dedupeLatestFactsByKey(threadFactsRaw, MAX_THREAD_FACTS);
         const spaceFacts = dedupeLatestFactsByKey(spaceFactsRaw, MAX_SPACE_FACTS);
         const globalFacts = dedupeLatestFactsByKey(globalFactsRaw, MAX_GLOBAL_FACTS);
-        const openActions = [...threadActionsRaw, ...spaceActionsRaw]
-            .filter((action, index, arr) => arr.findIndex((other) => other.id === action.id) === index)
-            .slice(0, MAX_ACTIONS);
+        const dedupedActions: Action[] = [];
+        const seenActionIds = new Set<string>();
+        for (const action of [...threadActionsRaw, ...spaceActionsRaw]) {
+            if (seenActionIds.has(action.id)) continue;
+            seenActionIds.add(action.id);
+            dedupedActions.push(action);
+        }
+        const openActions = sortActionsForContext(dedupedActions).slice(0, MAX_ACTIONS);
 
         const memoryBlock = buildMemoryBlock({
             summary: thread.summary_text,
@@ -267,10 +300,10 @@ export const MemoryService = {
 
         let reservedChars = estimateContextMessageChars(chatMessages[0]);
 
-        if (memoryBlock.length > 0) {
+        if (memoryBlock.text.length > 0) {
             chatMessages.push({
                 role: 'system',
-                content: memoryBlock
+                content: memoryBlock.text
             });
             reservedChars += estimateContextMessageChars(chatMessages[1]);
         }
@@ -299,6 +332,11 @@ export const MemoryService = {
             spaceFacts: spaceFacts.length,
             globalFacts: globalFacts.length,
             openActions: openActions.length,
+            memoryBlockChars: memoryBlock.text.length,
+            memoryBlockRawChars: memoryBlock.rawChars,
+            memoryBlockClipped: memoryBlock.clipped,
+            reservedChars,
+            candidateRecentMessages: candidateContextMessages.length,
             chatMessages: chatMessages.length,
             contextChars: recentSelection.usedChars,
             maxContextChars: MAX_TOTAL_CONTEXT_CHARS

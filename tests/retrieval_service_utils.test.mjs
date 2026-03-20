@@ -48,3 +48,21 @@ test('rankOlderCandidates filters excluded/system/blank messages and keeps deter
   assert.deepEqual(ranked.map((item) => item.message.id), ['m2', 'm3']);
   assert.ok(ranked[0].message.created_at < ranked[1].message.created_at);
 });
+
+test('rankOlderCandidates keeps deterministic id ordering for same timestamp ties', () => {
+  const candidates = [
+    { id: 'b', text: 'project timeline', created_at: 3000, role: 'user' },
+    { id: 'a', text: 'project timeline', created_at: 3000, role: 'user' },
+    { id: 'c', text: 'project timeline', created_at: 2000, role: 'user' }
+  ];
+
+  const ranked = rankOlderCandidates(
+    candidates,
+    'project timeline',
+    tokenize('project timeline'),
+    new Set(),
+    3
+  );
+
+  assert.deepEqual(ranked.map((item) => item.message.id), ['c', 'a', 'b']);
+});

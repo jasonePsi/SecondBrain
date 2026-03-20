@@ -14,6 +14,7 @@ export default function ModelSelectionScreen() {
     const [installedModelIds, setInstalledModelIds] = useState<Set<string>>(new Set());
     const [activeModelId, setActiveModelId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
@@ -22,6 +23,8 @@ export default function ModelSelectionScreen() {
 
     const loadData = async () => {
         try {
+            setLoading(true);
+            setLoadError(null);
             const allModels = getAllModels();
             setModels(allModels);
 
@@ -40,12 +43,16 @@ export default function ModelSelectionScreen() {
                 setSelectedModel(activeModel.model_id);
             } else if (installedModels.length > 0) {
                 setSelectedModel(installedModels[0].model_id);
-            } else if (freeDisk < 5_000_000_000) {
-                // Auto-select lighter model if storage is tight.
-                setSelectedModel('llama-3.2-1b');
+            } else {
+                // Auto-select a sensible default so first-run users can proceed immediately.
+                const fallbackModelId = freeDisk < 5_000_000_000
+                    ? 'llama-3.2-1b'
+                    : (allModels[0]?.id || null);
+                setSelectedModel(fallbackModelId);
             }
         } catch (error) {
             console.error('Error loading model data:', error);
+            setLoadError('Could not load model options. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -58,7 +65,8 @@ export default function ModelSelectionScreen() {
     const formatBatteryImpact = (impact: ModelConfig['batteryImpact']) => {
         if (impact === 'low') return '🔋 Low';
         if (impact === 'medium') return '🔋 Medium';
-        return '🔋 High';
+        if (impact === 'high') return '🔋 High';
+        return `🔋 ${String(impact || 'Unknown')}`;
     };
 
     const getModelStatus = (modelId: string): 'active' | 'installed' | 'available' => {
@@ -94,22 +102,32 @@ export default function ModelSelectionScreen() {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading models…</Text>
             </View>
         );
     }
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-            <Text style={styles.title}>Choose Your Brain</Text>
+            <Text style={styles.title}>Choose a Local Model</Text>
             <Text style={styles.subtitle}>
-                Select a language model that fits your needs. You can change this later.
+                Pick one local model for offline chat. You can install or switch models later in Settings.
             </Text>
 
             <View style={styles.storageInfo}>
                 <Text style={styles.storageText}>
-                    Available Storage: {formatBytes(availableStorage)}
+                    Free storage on device: {formatBytes(availableStorage)}
                 </Text>
             </View>
+
+            {!!loadError && (
+                <View style={styles.errorBox}>
+                    <Text style={styles.errorText}>{loadError}</Text>
+                    <TouchableOpacity onPress={loadData}>
+                        <Text style={styles.errorAction}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             {models.map((model) => (
                 <TouchableOpacity
@@ -207,11 +225,18 @@ export default function ModelSelectionScreen() {
                 disabled={!selectedModel || submitting}
             >
                 <Text style={styles.continueButtonText}>
-                    {selectedModel && installedModelIds.has(selectedModel)
+                    {submitting
+                        ? 'Please wait…'
+                        : selectedModel && installedModelIds.has(selectedModel)
                         ? 'Use Selected Model'
                         : 'Download & Continue'}
                 </Text>
             </TouchableOpacity>
+            <Text style={styles.continueHint}>
+                {selectedModel && installedModelIds.has(selectedModel)
+                    ? 'This will switch your active local model.'
+                    : 'Next step installs and activates this model before opening the app.'}
+            </Text>
         </ScrollView>
     );
 }
@@ -230,6 +255,11 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: Colors.background
+    },
+    loadingText: {
+        marginTop: 10,
+        fontSize: 13,
+        color: Colors.secondaryText
     },
     title: {
         fontSize: 32,
@@ -250,6 +280,24 @@ const styles = StyleSheet.create({
     storageText: {
         fontSize: 14,
         color: Colors.textSecondary
+    },
+    errorBox: {
+        marginBottom: 16,
+        backgroundColor: '#FEF2F2',
+        borderColor: '#FECACA',
+        borderWidth: 1,
+        borderRadius: 8,
+        padding: 10
+    },
+    errorText: {
+        color: '#991B1B',
+        fontSize: 12
+    },
+    errorAction: {
+        marginTop: 6,
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     modelCard: {
         backgroundColor: Colors.card,
@@ -364,7 +412,7 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         alignItems: 'center',
         marginTop: 8,
-        marginBottom: 40
+        marginBottom: 8
     },
     continueButtonDisabled: {
         backgroundColor: Colors.border,
@@ -374,5 +422,12 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 16,
         fontWeight: '600'
+    },
+    continueHint: {
+        marginTop: 8,
+        marginBottom: 32,
+        fontSize: 12,
+        color: Colors.secondaryText,
+        textAlign: 'center'
     }
 });

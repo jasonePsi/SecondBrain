@@ -1,9 +1,19 @@
-import { AIConfig } from '../../constants/AIConfig';
-import { sanitizeAssistantResponse } from '../ai/sanitize';
+import { AIConfig } from '../../constants/AIConfig.ts';
+import { sanitizeAssistantResponse } from '../ai/sanitize.ts';
 import {
+    isNonRetryableProxyErrorCode,
+    parseProxyErrorPayload,
     toProxyErrorMessage,
     trimErrorMessage
-} from './openai_proxy_error_utils';
+} from './openai_proxy_error_utils.ts';
+import {
+    healthHttpErrorStatus,
+    invalidHealthResponseStatus,
+    mapHealthPayloadToStatus,
+    missingProxyUrlStatus,
+    unreachableProxyStatus
+} from './openai_proxy_status_utils.ts';
+import type { ProxyHealthResponse } from './openai_proxy_status_utils.ts';
 import type {
     AIProvider,
     AIProviderStatus,
@@ -11,12 +21,6 @@ import type {
     AIWorkload,
     ChatMessage
 } from '../ai/types';
-
-type ProxyHealthResponse = {
-    ok?: boolean;
-    configured?: boolean;
-    reason?: string;
-};
 
 type ProxyChatResponse = {
     text?: string;
@@ -55,6 +59,17 @@ const fetchWithTimeout = async (
     }
 };
 
+const readResponseTraceId = <T extends { requestId?: string }>(
+    response: Response,
+    body?: T
+): string | undefined => {
+    const bodyRequestId = typeof body?.requestId === 'string' && body.requestId.trim().length > 0
+        ? body.requestId.trim()
+        : undefined;
+    const headerRequestId = response.headers.get('x-request-id')?.trim() || undefined;
+    return bodyRequestId || headerRequestId;
+};
+
 export class OpenAIProxyProvider implements AIProvider {
     readonly provider = 'cloud' as const;
     readonly label = 'OpenAI (Cloud via Proxy)';
@@ -62,7 +77,10 @@ export class OpenAIProxyProvider implements AIProvider {
     async init(): Promise<void> {
         const status = await this.getStatus();
         if (!status.available) {
-            throw new Error(status.reason || 'Cloud provider is unavailable');
+            const codePrefix = status.detailCode ? `[${status.detailCode}] ` : '';
+            const reason = status.reason?.trim() || 'Cloud provider is unavailable';
+            const traceSuffix = status.requestId ? ` (trace ${status.requestId})` : '';
+            throw new Error(`${codePrefix}${reason}${traceSuffix}`);
         }
     }
 
@@ -90,7 +108,7 @@ export class OpenAIProxyProvider implements AIProvider {
         }
 
         const timeoutMs = options?.timeoutMs || AIConfig.defaultTimeoutMs;
-        const retries = options?.retries ?? 1;
+        const retries = Math.max(0, options?.retries ?? 1);
         const requestId = options?.requestId || generateRequestId('cloud');
         const url = `${baseUrl}${path}`;
         const payload = {
@@ -102,7 +120,9 @@ export class OpenAIProxyProvider implements AIProvider {
         console.log('[OpenAIProxyProvider] request', {
             path,
             requestId,
-            timeoutMs
+            timeoutMs,
+            privacyMode: AIConfig.defaultPrivacy.mode,
+            privacyStore: AIConfig.defaultPrivacy.store
         });
 
         let lastError: Error | null = null;
@@ -124,28 +144,75 @@ export class OpenAIProxyProvider implements AIProvider {
 
                 if (!response.ok) {
                     const responseBody = await response.text();
-                    const shouldRetry = RETRYABLE_STATUS_CODES.has(response.status) && attempt < retries;
+                    const responseTraceId = response.headers.get('x-request-id')?.trim() || requestId;
+                    const parsedError = parseProxyErrorPayload(responseBody);
+                    const nonRetryableCode = isNonRetryableProxyErrorCode(parsedError?.code);
+                    const shouldRetry = (
+                        RETRYABLE_STATUS_CODES.has(response.status)
+                        && !nonRetryableCode
+                        && attempt < retries
+                    );
+                    console.warn('[OpenAIProxyProvider] non-2xx response', {
+                        path,
+                        requestId,
+                        proxyRequestId: responseTraceId,
+                        status: response.status,
+                        errorCode: parsedError?.code,
+                        attempt,
+                        willRetry: shouldRetry
+                    });
                     if (shouldRetry) {
                         await delay(300 * (attempt + 1));
                         continue;
                     }
                     const nonRetryableError = new Error(
-                        toProxyErrorMessage(response.status, responseBody, requestId)
+                        toProxyErrorMessage(response.status, responseBody, responseTraceId)
                     );
                     (nonRetryableError as any).retryable = false;
                     throw nonRetryableError;
                 }
 
-                const parsedResponse = (await response.json()) as T;
+                let parsedResponse: T;
+                try {
+                    parsedResponse = (await response.json()) as T;
+                } catch (error: any) {
+                    const responseTraceId = response.headers.get('x-request-id')?.trim() || requestId;
+                    const invalidResponseError = new Error(
+                        trimErrorMessage(
+                            `[CLOUD_PROXY_INVALID_RESPONSE] Cloud proxy returned invalid JSON (request ${responseTraceId})`
+                        )
+                    );
+                    (invalidResponseError as any).retryable = false;
+                    throw invalidResponseError;
+                }
+                const responseTraceId = readResponseTraceId(
+                    response,
+                    parsedResponse as { requestId?: string }
+                );
+                if (responseTraceId && responseTraceId !== requestId) {
+                    console.warn('[OpenAIProxyProvider] request trace mismatch', {
+                        path,
+                        clientRequestId: requestId,
+                        proxyRequestId: responseTraceId
+                    });
+                }
                 console.log('[OpenAIProxyProvider] response', {
                     path,
-                    requestId
+                    requestId,
+                    proxyRequestId: responseTraceId
                 });
                 return parsedResponse;
             } catch (error: any) {
                 const isAbort = error?.name === 'AbortError';
                 const isRetryable = error?.retryable !== false;
                 const shouldRetry = isRetryable && attempt < retries;
+                console.warn('[OpenAIProxyProvider] request attempt failed', {
+                    path,
+                    requestId,
+                    attempt,
+                    isAbort,
+                    willRetry: shouldRetry
+                });
                 lastError = new Error(
                     isAbort
                         ? `Cloud request timed out after ${timeoutMs}ms`
@@ -162,50 +229,70 @@ export class OpenAIProxyProvider implements AIProvider {
 
     async getStatus(): Promise<AIProviderStatus> {
         const baseUrl = this.getBaseUrl();
+        const checkedAt = Date.now();
+        const healthRequestId = generateRequestId('health');
+        const statusSeed = {
+            provider: this.provider,
+            label: this.label,
+            checkedAt
+        } as const;
+
         if (!baseUrl) {
-            return {
-                provider: this.provider,
-                label: this.label,
-                available: false,
-                configured: false,
-                reason: 'Set EXPO_PUBLIC_AI_PROXY_BASE_URL to enable cloud provider'
-            };
+            return missingProxyUrlStatus(statusSeed);
         }
 
         try {
             const response = await fetchWithTimeout(
                 `${baseUrl}/health`,
-                { method: 'GET', headers: { Accept: 'application/json' } },
+                {
+                    method: 'GET',
+                    headers: {
+                        Accept: 'application/json',
+                        'x-request-id': healthRequestId
+                    }
+                },
                 AIConfig.healthTimeoutMs
             );
+            const responseTraceIdFromHeader = response.headers.get('x-request-id')?.trim() || healthRequestId;
 
             if (!response.ok) {
-                return {
-                    provider: this.provider,
-                    label: this.label,
-                    available: false,
-                    configured: true,
-                    reason: `Proxy health check failed (${response.status})`
-                };
+                return healthHttpErrorStatus(
+                    {
+                        ...statusSeed,
+                        requestId: responseTraceIdFromHeader
+                    },
+                    response.status
+                );
             }
 
-            const payload = (await response.json()) as ProxyHealthResponse;
-            const configured = payload.configured !== false;
-            return {
-                provider: this.provider,
-                label: this.label,
-                available: !!payload.ok && configured,
-                configured,
-                reason: payload.reason
-            };
+            let payload: ProxyHealthResponse;
+            try {
+                payload = (await response.json()) as ProxyHealthResponse;
+            } catch (error: any) {
+                return invalidHealthResponseStatus(
+                    {
+                        ...statusSeed,
+                        requestId: responseTraceIdFromHeader
+                    },
+                    error?.message || 'parse failed'
+                );
+            }
+            const responseTraceId = readResponseTraceId(response, payload) || healthRequestId;
+            return mapHealthPayloadToStatus(
+                {
+                    ...statusSeed,
+                    requestId: responseTraceId
+                },
+                payload
+            );
         } catch (error: any) {
-            return {
-                provider: this.provider,
-                label: this.label,
-                available: false,
-                configured: true,
-                reason: trimErrorMessage(error?.message || 'Cloud proxy unreachable')
-            };
+            return unreachableProxyStatus(
+                {
+                    ...statusSeed,
+                    requestId: healthRequestId
+                },
+                error?.message || 'Cloud proxy unreachable. Verify URL/network and that the proxy is running.'
+            );
         }
     }
 
@@ -219,7 +306,7 @@ export class OpenAIProxyProvider implements AIProvider {
             {
                 timeoutMs: options?.timeoutMs,
                 requestId: options?.requestId,
-                retries: 1
+                retries: AIConfig.chatRetries
             }
         );
 
@@ -240,7 +327,7 @@ export class OpenAIProxyProvider implements AIProvider {
             {
                 timeoutMs: options?.timeoutMs,
                 requestId: options?.requestId,
-                retries: 0
+                retries: AIConfig.extractionRetries
             }
         );
 

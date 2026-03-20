@@ -4,6 +4,13 @@ export type ProxyErrorPayload = {
     requestId?: string;
 };
 
+const NON_RETRYABLE_PROXY_ERROR_CODES = new Set([
+    'PROXY_NOT_CONFIGURED',
+    'INVALID_REQUEST',
+    'INVALID_JSON',
+    'CLOUD_PROXY_URL_MISSING'
+]);
+
 export const trimErrorMessage = (message: string, maxChars = 180): string => {
     const normalized = message.replace(/\s+/g, ' ').trim();
     if (normalized.length <= maxChars) return normalized;
@@ -46,6 +53,11 @@ export const parseProxyErrorPayload = (raw: string): ProxyErrorPayload | null =>
             message: trimmed
         };
     }
+};
+
+export const isNonRetryableProxyErrorCode = (code: unknown): boolean => {
+    if (typeof code !== 'string') return false;
+    return NON_RETRYABLE_PROXY_ERROR_CODES.has(code.trim());
 };
 
 export const toProxyErrorMessage = (

@@ -7,8 +7,8 @@ on:
   pull_request:
 
 jobs:
-  app:
-    name: App Checks
+  app_and_proxy:
+    name: App + Proxy Checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,33 +19,12 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            backend-proxy/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify app (typecheck + deterministic tests)
-        run: npm run verify
-
-  backend_proxy:
-    name: Backend Proxy Checks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend-proxy
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: backend-proxy/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify backend-proxy (syntax + smoke tests)
-        run: npm run verify
+      - name: Verify all (app + backend-proxy)
+        run: npm run verify:all

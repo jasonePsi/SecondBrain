@@ -4,6 +4,11 @@ export interface BudgetMessage {
 }
 
 export const clipText = (text: string, maxChars = 240): string => {
+    if (maxChars <= 0) return '';
+    if (maxChars === 1) {
+        if (text.length <= 1) return text;
+        return '…';
+    }
     if (text.length <= maxChars) return text;
     return text.slice(0, maxChars - 1).trimEnd() + '…';
 };
@@ -19,14 +24,24 @@ export const selectMessagesWithinCharBudget = <T extends BudgetMessage>(
         reservedChars: number;
     }
 ): { selectedMessages: T[]; usedChars: number; droppedCount: number } => {
+    const maxChars = Math.max(0, budget.maxChars);
+    const normalizedReserved = Math.max(0, budget.reservedChars);
     const selected: T[] = [];
-    let usedChars = budget.reservedChars;
+    let usedChars = Math.min(normalizedReserved, maxChars);
+
+    if (usedChars >= maxChars) {
+        return {
+            selectedMessages: selected,
+            usedChars,
+            droppedCount: messages.length
+        };
+    }
 
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
         const estimatedChars = estimateContextMessageChars(message);
-        if (usedChars + estimatedChars > budget.maxChars) {
-            continue;
+        if (usedChars + estimatedChars > maxChars) {
+            break;
         }
 
         selected.unshift(message);

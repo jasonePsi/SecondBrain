@@ -1,4 +1,4 @@
-import { Message, MessageRepo } from '../repositories/message_repo';
+import { MessageRepo } from '../repositories/message_repo';
 import { rankOlderCandidates, scoreMessage, tokenize } from './retrieval_utils';
 
 const DEFAULT_RECENT_OFFSET = 12;
@@ -49,7 +49,10 @@ export const RetrievalService = {
             threadId,
             queryTokens: queryTokens.length,
             candidates: olderCandidates.length,
-            selected: ranked.length
+            selected: ranked.length,
+            maxResults,
+            recentOffset,
+            candidateLimit
         });
 
         return ranked.map((item) => ({

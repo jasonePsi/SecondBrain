@@ -22,6 +22,9 @@ export interface AIProviderStatus {
     available: boolean;
     configured: boolean;
     reason?: string;
+    detailCode?: string;
+    requestId?: string;
+    lastCheckedAt?: number;
 }
 
 export interface AIProvider {

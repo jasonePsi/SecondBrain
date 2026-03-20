@@ -53,6 +53,10 @@ const toMessageTitle = (message: MessageSearchHit): string => {
     return `${text.slice(0, 71).trimEnd()}…`;
 };
 
+const formatResultTimestamp = (value: number): string => {
+    return new Date(value).toLocaleString();
+};
+
 export default function SearchScreen() {
     const router = useRouter();
     const [query, setQuery] = useState('');
@@ -63,6 +67,7 @@ export default function SearchScreen() {
     const [messageThreadTitles, setMessageThreadTitles] = useState<Record<string, string>>({});
     const [isSearching, setIsSearching] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [searchNonce, setSearchNonce] = useState(0);
     const searchTokenRef = useRef(0);
 
     useEffect(() => {
@@ -87,6 +92,10 @@ export default function SearchScreen() {
             const searchToken = ++searchTokenRef.current;
             setIsSearching(true);
             setError(null);
+            setSpaces([]);
+            setThreads([]);
+            setMessages([]);
+            setMessageThreadTitles({});
             try {
                 const [spaceRows, threadRows, messageRows] = await Promise.all([
                     SpaceRepo.search(debouncedQuery),
@@ -107,7 +116,8 @@ export default function SearchScreen() {
                 setMessageThreadTitles(nextMessageThreadTitles);
             } catch (err: any) {
                 if (searchToken !== searchTokenRef.current) return;
-                setError(err?.message || 'Search is temporarily unavailable.');
+                console.error('Search failed:', err);
+                setError('Search is temporarily unavailable. Please try again.');
             } finally {
                 if (searchToken !== searchTokenRef.current) return;
                 setIsSearching(false);
@@ -115,7 +125,7 @@ export default function SearchScreen() {
         };
 
         runSearch();
-    }, [debouncedQuery]);
+    }, [debouncedQuery, searchNonce]);
 
     const sections = useMemo(() => {
         const nextSections: Array<{ title: string; data: SearchResult[] }> = [];
@@ -152,8 +162,8 @@ export default function SearchScreen() {
                 data: messages.map((message) => ({
                     type: 'message',
                     id: message.id,
-                title: toMessageTitle(message),
-                    subtitle: `${message.role === 'assistant' ? 'Assistant message' : 'Your message'} • ${messageThreadTitles[message.thread_id] || 'Thread'}`,
+                    title: toMessageTitle(message),
+                    subtitle: `${message.role === 'assistant' ? 'Assistant' : 'You'} • ${messageThreadTitles[message.thread_id] || 'Thread'} • ${formatResultTimestamp(message.created_at)}`,
                     snippet: message.snippet,
                     navigateTo: `/thread/${message.thread_id}?messageId=${encodeURIComponent(message.id)}`
                 }))
@@ -177,6 +187,11 @@ export default function SearchScreen() {
         setError(null);
     };
 
+    const retrySearch = () => {
+        if (!debouncedQuery) return;
+        setSearchNonce((prev) => prev + 1);
+    };
+
     const renderItem = ({ item }: { item: SearchResult }) => (
         <TouchableOpacity
             style={styles.resultItem}
@@ -195,6 +210,9 @@ export default function SearchScreen() {
                     <Text style={styles.resultSnippet} numberOfLines={2}>
                         {item.snippet}
                     </Text>
+                )}
+                {item.type === 'message' && (
+                    <Text style={styles.resultRouteHint}>Opens directly at this message</Text>
                 )}
             </View>
             <Ionicons name="chevron-forward" size={18} color={Colors.secondaryText} />
@@ -223,11 +241,26 @@ export default function SearchScreen() {
             </View>
 
             {!!error && (
-                <Text style={styles.errorText}>Search is unavailable right now. {error}</Text>
+                <View style={styles.errorRow}>
+                    <Text style={styles.errorText}>{error}</Text>
+                    <View style={styles.errorActionsRow}>
+                        <TouchableOpacity onPress={retrySearch}>
+                            <Text style={styles.errorAction}>Retry</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={clearQuery}>
+                            <Text style={styles.errorAction}>Clear</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
             )}
 
             {isSearching && debouncedQuery.length > 0 && (
-                <Text style={styles.searchingText}>Searching…</Text>
+                <Text style={styles.searchingText}>Searching for "{debouncedQuery}"…</Text>
+            )}
+            {!!debouncedQuery && !isSearching && sections.length > 0 && (
+                <Text style={styles.searchingText}>
+                    {sections.reduce((sum, section) => sum + section.data.length, 0)} result(s) for "{debouncedQuery}"
+                </Text>
             )}
 
             {!debouncedQuery && (
@@ -242,6 +275,9 @@ export default function SearchScreen() {
                 <View style={styles.emptyState}>
                     <Text style={styles.emptyTitle}>No results</Text>
                     <Text style={styles.emptyText}>No matches for "{debouncedQuery}". Try a broader phrase.</Text>
+                    <TouchableOpacity onPress={clearQuery} style={styles.emptyActionButton}>
+                        <Text style={styles.emptyActionText}>Clear search</Text>
+                    </TouchableOpacity>
                 </View>
             )}
 
@@ -289,10 +325,26 @@ const styles = StyleSheet.create({
         color: Colors.text
     },
     errorText: {
-        marginHorizontal: 16,
-        marginBottom: 6,
+        flex: 1,
         color: Colors.notification,
         fontSize: 12
+    },
+    errorAction: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
+    },
+    errorActionsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10
+    },
+    errorRow: {
+        marginHorizontal: 16,
+        marginBottom: 6,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10
     },
     searchingText: {
         marginHorizontal: 16,
@@ -343,6 +395,11 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: Colors.secondaryText
     },
+    resultRouteHint: {
+        marginTop: 4,
+        fontSize: 11,
+        color: Colors.primary
+    },
     emptyState: {
         flex: 1,
         alignItems: 'center',
@@ -360,5 +417,18 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: Colors.secondaryText,
         textAlign: 'center'
+    },
+    emptyActionButton: {
+        marginTop: 12,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: Colors.primary,
+        paddingHorizontal: 12,
+        paddingVertical: 7
+    },
+    emptyActionText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     }
 });

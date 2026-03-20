@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { getModelById } from '../constants/ModelRegistry';
 import { ModelRepo } from '../repositories/model_repo';
+import { resolveFallbackActiveModelId } from './model_manager_utils';
 
 const MODELS_DIR = ((FileSystem as any).documentDirectory || '') + 'models/';
 
@@ -135,8 +136,8 @@ export const ModelManager = {
             let fallbackActiveModelId: string | null = null;
             if (deletedWasActive) {
                 const remainingModels = await ModelRepo.getInstalledModels();
-                if (remainingModels.length > 0) {
-                    fallbackActiveModelId = remainingModels[0].model_id;
+                fallbackActiveModelId = resolveFallbackActiveModelId(deletedWasActive, remainingModels);
+                if (fallbackActiveModelId) {
                     await ModelRepo.activateModel(fallbackActiveModelId);
                 } else {
                     await ModelRepo.clearActiveModel();

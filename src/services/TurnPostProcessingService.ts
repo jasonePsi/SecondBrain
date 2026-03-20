@@ -5,7 +5,7 @@ import {
     emptyExecutionReport,
     emptySummaryResult,
     extractionExceptionResult,
-    opsExecutionFailureReport
+    runTurnPostProcessingPipeline
 } from './turn_post_processing_utils';
 import type { AIProviderType } from './LLMService';
 
@@ -38,81 +38,121 @@ export const TurnPostProcessingService = {
         const extractFromTurn = deps?.extractFromTurn || StructuredExtractionService.extractFromTurn;
         const executeOps = deps?.executeOps || OpsExecutor.execute;
         const updateSummary = deps?.updateSummary || MemoryService.updateThreadSummaryIfNeeded;
-
-        let extraction: StructuredExtractionResult = {
-            raw: '',
-            ops: [],
-            parseError: undefined,
-            diagnostics: {
-                rawOpsCount: 0,
-                acceptedOpsCount: 0,
-                droppedOpsCount: 0,
-                droppedReasons: []
-            }
+        const baseLog = {
+            turnId: input.turnId,
+            provider: input.provider,
+            threadId: input.threadId
         };
 
-        try {
-            extraction = await extractFromTurn(
-                input.userMessage,
-                input.assistantMessage,
-                {
-                    provider: input.provider,
-                    requestId: input.turnId ? `${input.turnId}:extract` : undefined,
-                    turnId: input.turnId
-                }
-            );
-        } catch (error: any) {
-            extraction = extractionExceptionResult(
-                error?.message || 'Structured extraction failed'
-            ) as StructuredExtractionResult;
-            console.warn('[TurnPostProcessing] extraction failed', {
-                turnId: input.turnId,
-                threadId: input.threadId,
-                error: extraction.parseError
-            });
-        }
-
-        let executionReport = emptyExecutionReport();
-        if (extraction.ops.length > 0) {
-            try {
-                executionReport = await executeOps(
-                    { ops: extraction.ops },
+        console.log('[TurnPostProcessing] started', baseLog);
+        const pipelineInput = {
+            extract: async () => {
+                return await extractFromTurn(
+                    input.userMessage,
+                    input.assistantMessage,
+                    {
+                        provider: input.provider,
+                        requestId: input.turnId ? `${input.turnId}:extract` : undefined,
+                        turnId: input.turnId
+                    }
+                );
+            },
+            executeOps: async (ops: unknown[]) => {
+                return await executeOps(
+                    { ops },
                     input.spaceId || undefined,
                     input.threadId,
                     { turnId: input.turnId }
                 );
-            } catch (error: any) {
-                executionReport = opsExecutionFailureReport(
-                    extraction.ops.length,
-                    error?.message || 'Ops execution failed'
-                );
-                console.warn('[TurnPostProcessing] ops execution failed', {
-                    turnId: input.turnId,
-                    threadId: input.threadId,
-                    error: error?.message
+            },
+            updateSummary: async () => {
+                return await updateSummary(input.threadId, {
+                    provider: input.provider,
+                    requestId: input.turnId ? `${input.turnId}:summary` : undefined,
+                    turnId: input.turnId
                 });
-            }
-        }
+            },
+            onStage: (event: {
+                stage: 'extraction' | 'ops' | 'summary' | 'completed';
+                status: 'done' | 'failed' | 'skipped';
+                detail?: string;
+                meta?: Record<string, unknown>;
+            }) => {
+                if (event.stage === 'extraction' && event.status === 'done') {
+                    console.log('[TurnPostProcessing] extraction stage done', {
+                        ...baseLog,
+                        extractedOps: event.meta?.extractedOps,
+                        parseError: event.meta?.parseError,
+                        droppedOps: event.meta?.droppedOps
+                    });
+                    return;
+                }
 
-        let summary = emptySummaryResult();
-        try {
-            summary = await updateSummary(input.threadId, {
-                provider: input.provider,
-                requestId: input.turnId ? `${input.turnId}:summary` : undefined,
-                turnId: input.turnId
+                if (event.stage === 'extraction' && event.status === 'failed') {
+                    console.warn('[TurnPostProcessing] extraction failed', {
+                        ...baseLog,
+                        error: event.detail
+                    });
+                    return;
+                }
+
+                if (event.stage === 'ops' && event.status === 'done') {
+                    console.log('[TurnPostProcessing] ops stage done', {
+                        ...baseLog,
+                        executed: event.meta?.executed,
+                        skipped: event.meta?.skipped,
+                        failed: event.meta?.failed
+                    });
+                    return;
+                }
+
+                if (event.stage === 'ops' && event.status === 'failed') {
+                    console.warn('[TurnPostProcessing] ops execution failed', {
+                        ...baseLog,
+                        error: event.detail
+                    });
+                    return;
+                }
+
+                if (event.stage === 'summary' && event.status === 'done') {
+                    console.log('[TurnPostProcessing] summary stage done', {
+                        ...baseLog,
+                        summaryUpdated: event.meta?.summaryUpdated,
+                        summaryLength: event.meta?.summaryLength
+                    });
+                    return;
+                }
+
+                if (event.stage === 'summary' && event.status === 'failed') {
+                    console.warn('[TurnPostProcessing] summary update failed', {
+                        ...baseLog,
+                        error: event.detail
+                    });
+                }
+            }
+        };
+
+        const pipelineResult = await runTurnPostProcessingPipeline(pipelineInput).catch((error) => {
+            const message = error instanceof Error ? error.message : 'Post-processing pipeline failed';
+            console.error('[TurnPostProcessing] pipeline failure', {
+                ...baseLog,
+                error: message
             });
-        } catch (error: any) {
-            console.warn('[TurnPostProcessing] summary update failed', {
-                turnId: input.turnId,
-                threadId: input.threadId,
-                error: error?.message
-            });
-        }
+            return {
+                extraction: extractionExceptionResult(message),
+                executionReport: emptyExecutionReport(),
+                summary: emptySummaryResult(),
+                outcome: 'degraded' as const
+            };
+        });
+        const extraction = pipelineResult.extraction as StructuredExtractionResult;
+        const executionReport = pipelineResult.executionReport as OpsExecutionReport;
+        const summary = pipelineResult.summary as SummaryUpdateResult;
+        const outcome = pipelineResult.outcome;
 
         console.log('[TurnPostProcessing] completed', {
-            turnId: input.turnId,
-            provider: input.provider,
-            threadId: input.threadId,
+            ...baseLog,
+            outcome,
             extractedOps: extraction.ops.length,
             parseError: !!extraction.parseError,
             droppedOps: extraction.diagnostics.droppedOpsCount,

@@ -33,7 +33,8 @@ export default function SpaceDetailScreen() {
       const data = await ThreadRepo.listBySpace(id);
       setThreads(data);
     } catch (err: any) {
-      setError(err?.message || 'Could not load threads.');
+      console.error('Failed to load space detail:', err);
+      setError('Could not load threads right now.');
     } finally {
       setLoading(false);
     }
@@ -46,6 +47,7 @@ export default function SpaceDetailScreen() {
   );
 
   const openNewThread = () => {
+    if (isEditing) return;
     setNewThreadName('');
     setIsNewThreadOpen(true);
   };
@@ -58,12 +60,17 @@ export default function SpaceDetailScreen() {
   const createThread = async () => {
     if (!id) return;
     const trimmed = newThreadName.trim();
-    const title = trimmed || `New Thread ${new Date().toLocaleTimeString()}`;
-    const newId = await ThreadRepo.create(id, title);
-    await FeedRepo.create(id, 'thread_created', newId);
-    closeNewThread();
-    await loadData();
-    router.push(`/thread/${newId}`);
+    const title = trimmed || 'Untitled Thread';
+    try {
+      const newId = await ThreadRepo.create(id, title);
+      await FeedRepo.create(id, 'thread_created', newId);
+      closeNewThread();
+      await loadData();
+      router.push(`/thread/${newId}`);
+    } catch (error) {
+      console.error('Create thread failed:', error);
+      Alert.alert('Could Not Create Thread', 'Please try again.');
+    }
   };
 
   const toggleEdit = () => {
@@ -166,11 +173,17 @@ export default function SpaceDetailScreen() {
           title: spaceName,
           headerRight: () => (
             <View style={styles.headerActions}>
-              <TouchableOpacity onPress={openNewThread} style={styles.headerButton}>
-                <Ionicons name="add-circle" size={26} color={Colors.primary} />
-              </TouchableOpacity>
+              {!isEditing && (
+                <TouchableOpacity onPress={openNewThread} style={styles.headerButton}>
+                  <Ionicons name="add-circle" size={26} color={Colors.primary} />
+                </TouchableOpacity>
+              )}
               <TouchableOpacity onPress={toggleEdit} style={styles.headerButton}>
-                <Ionicons name="ellipsis-horizontal-circle" size={26} color={Colors.primary} />
+                <Ionicons
+                  name={isEditing ? 'checkmark-circle' : 'ellipsis-horizontal-circle'}
+                  size={26}
+                  color={Colors.primary}
+                />
               </TouchableOpacity>
             </View>
           )
@@ -188,12 +201,27 @@ export default function SpaceDetailScreen() {
           ) : (
             <View style={styles.centerState}>
               <Text style={styles.empty}>No threads yet. Create your first thread.</Text>
+              <TouchableOpacity style={styles.emptyActionButton} onPress={openNewThread}>
+                <Text style={styles.emptyActionText}>Create Thread</Text>
+              </TouchableOpacity>
             </View>
           )
         )}
-        ListHeaderComponent={error ? (
-          <Text style={styles.inlineError}>Could not refresh threads: {error}</Text>
-        ) : null}
+        ListHeaderComponent={(
+          <View>
+            {!!error && (
+              <View style={styles.inlineWarningRow}>
+                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                <TouchableOpacity onPress={loadData}>
+                  <Text style={styles.inlineWarningAction}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {isEditing && (
+              <Text style={styles.inlineHint}>Editing enabled: rename or delete threads. Tap ✓ when done.</Text>
+            )}
+          </View>
+        )}
       />
 
       <Modal
@@ -206,6 +234,7 @@ export default function SpaceDetailScreen() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>New Thread</Text>
+              <Text style={styles.modalSubtitle}>Give it a name now, or rename it later.</Text>
               <TextInput
                 style={styles.modalInput}
                 value={newThreadName}
@@ -241,6 +270,7 @@ export default function SpaceDetailScreen() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Rename Thread</Text>
+              <Text style={styles.modalSubtitle}>Use a clear title so this thread is easy to find.</Text>
               <TextInput
                 style={styles.modalInput}
                 value={renameValue}
@@ -306,6 +336,18 @@ const styles = StyleSheet.create({
     marginTop: 40,
     alignItems: 'center'
   },
+  emptyActionButton: {
+    marginTop: 12,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  emptyActionText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
   fullState: {
     flex: 1,
     alignItems: 'center',
@@ -313,10 +355,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24
   },
   inlineError: {
+    flex: 1,
     color: Colors.notification,
     fontSize: 12,
+    marginTop: 8
+  },
+  inlineWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginHorizontal: 16,
-    marginTop: 8,
+    marginBottom: 4
+  },
+  inlineWarningAction: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  inlineHint: {
+    color: Colors.secondaryText,
+    fontSize: 12,
+    marginHorizontal: 16,
+    marginTop: 2,
     marginBottom: 4
   },
   errorStateText: {
@@ -374,8 +434,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 12,
+    marginBottom: 4,
     color: Colors.text
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: Colors.secondaryText,
+    marginBottom: 10
   },
   modalInput: {
     borderWidth: 1,

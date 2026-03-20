@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { resolveFallbackActiveModelId } from '../src/services/model_manager_utils.ts';
+
+test('resolveFallbackActiveModelId returns null when deleted model was not active', () => {
+  const fallback = resolveFallbackActiveModelId(false, [{ model_id: 'm1' }]);
+  assert.equal(fallback, null);
+});
+
+test('resolveFallbackActiveModelId returns first remaining model id for deterministic fallback', () => {
+  const fallback = resolveFallbackActiveModelId(true, [
+    { model_id: 'm2' },
+    { model_id: 'm3' }
+  ]);
+  assert.equal(fallback, 'm2');
+});
+
+test('resolveFallbackActiveModelId trims fallback id to avoid whitespace-only drift', () => {
+  const fallback = resolveFallbackActiveModelId(true, [
+    { model_id: '  m2  ' },
+    { model_id: 'm3' }
+  ]);
+  assert.equal(fallback, 'm2');
+});
+
+test('resolveFallbackActiveModelId returns null when remaining list is empty or invalid', () => {
+  assert.equal(resolveFallbackActiveModelId(true, []), null);
+  assert.equal(resolveFallbackActiveModelId(true, [{ model_id: '' }]), null);
+  assert.equal(resolveFallbackActiveModelId(true, [{ model_id: '   ' }]), null);
+});

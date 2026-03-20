@@ -27,6 +27,17 @@ export default function SettingsScreen() {
         }, [])
     );
 
+    const formatProviderReason = (status?: AIProviderStatus): string => {
+        if (!status) return 'Provider status is unknown. Tap Retry to refresh.';
+        const reason = status.reason?.trim();
+        const codePrefix = status.detailCode ? `[${status.detailCode}] ` : '';
+        const requestSuffix = status.requestId ? ` (trace ${status.requestId})` : '';
+        if (reason) return `${codePrefix}${reason}${requestSuffix}`;
+        if (!status.configured) return `${codePrefix}Provider is not configured${requestSuffix}`;
+        if (!status.available) return `${codePrefix}Provider is unavailable${requestSuffix}`;
+        return '';
+    };
+
     const loadData = async () => {
         try {
             setLoading(true);
@@ -49,6 +60,13 @@ export default function SettingsScreen() {
             setActiveModel(active);
             setInstalledModels(installed);
             setAvailableModels(all);
+
+            const selectedStatus = statuses.find((item) => item.provider === selectedProvider);
+            if (selectedStatus && !selectedStatus.available) {
+                setLoadError(formatProviderReason(selectedStatus));
+            } else if (!selectedStatus) {
+                setLoadError('Selected provider status is unknown. Tap Retry to refresh.');
+            }
         } catch (error) {
             console.error('Error loading model data:', error);
             setLoadError('Could not refresh settings. Try again.');
@@ -65,6 +83,8 @@ export default function SettingsScreen() {
         status: AIProviderStatus | undefined,
         isActive: boolean
     ): string => {
+        if (!status) return isActive ? 'Selected · Status Unknown' : 'Status Unknown';
+        if (!status?.configured) return isActive ? 'Selected · Not Configured' : 'Not Configured';
         if (isActive && status?.available === false) return 'Selected · Unavailable';
         if (isActive) return 'Selected';
         if (status?.available) return 'Available';
@@ -74,17 +94,29 @@ export default function SettingsScreen() {
     const handleSwitchProvider = async (provider: AIProviderType) => {
         try {
             setSwitchingProvider(provider);
+            if (provider === 'cloud') {
+                const latestCloudStatus = await LLMService.getProviderStatus('cloud');
+                setProviderStatuses((prev) => {
+                    const others = prev.filter((item) => item.provider !== 'cloud');
+                    return [...others, latestCloudStatus];
+                });
+                if (!latestCloudStatus.available) {
+                    setLoadError(formatProviderReason(latestCloudStatus));
+                    throw new Error(formatProviderReason(latestCloudStatus));
+                }
+            }
             await LLMService.setActiveProvider(provider);
+            setLoadError(null);
             Alert.alert(
                 'Provider Updated',
                 provider === 'cloud'
                     ? 'Cloud provider is now active.'
                     : 'Local provider is now active.'
             );
-            await loadData();
         } catch (error: any) {
             Alert.alert('Provider Unavailable', error.message || 'Could not switch provider.');
         } finally {
+            await loadData();
             setSwitchingProvider(null);
         }
     };
@@ -212,7 +244,9 @@ export default function SettingsScreen() {
 
             <View style={styles.section}>
                 <Text style={styles.sectionHeader}>AI Provider</Text>
-                <Text style={styles.smallText}>Current provider: {activeProvider === 'cloud' ? 'OpenAI Cloud (Proxy)' : 'Local (On-device)'}</Text>
+                <Text style={styles.smallText}>
+                    Current provider: {activeProvider === 'cloud' ? 'OpenAI Cloud (Proxy)' : 'Local (On-device)'}
+                </Text>
                 {[
                     {
                         id: 'local' as AIProviderType,
@@ -227,7 +261,7 @@ export default function SettingsScreen() {
                 ].map((option) => {
                     const status = getProviderStatus(option.id);
                     const isActive = activeProvider === option.id;
-                    const isUnavailable = option.id === 'cloud' && !status?.available;
+                    const isUnavailable = option.id === 'cloud' && !!status && !status.available;
                     const disabled = !!switchingProvider || isUnavailable;
 
                     return (
@@ -253,8 +287,11 @@ export default function SettingsScreen() {
                             </View>
 
                             <Text style={styles.providerDescription}>{option.description}</Text>
-                            {!!status?.reason && (
-                                <Text style={styles.providerReason}>{status.reason}</Text>
+                            {status && (!status.available || !status.configured || !!status.reason) && (
+                                <Text style={styles.providerReason}>{formatProviderReason(status)}</Text>
+                            )}
+                            {!status && (
+                                <Text style={styles.providerReason}>Status not loaded yet. Tap Retry above.</Text>
                             )}
 
                             {!isActive && (
@@ -270,7 +307,9 @@ export default function SettingsScreen() {
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
                                         <Text style={styles.providerSwitchButtonText}>
-                                            {option.id === 'cloud' ? 'Switch to Cloud' : 'Switch to Local'}
+                                            {isUnavailable && option.id === 'cloud'
+                                                ? 'Cloud Unavailable'
+                                                : (option.id === 'cloud' ? 'Switch to Cloud' : 'Switch to Local')}
                                         </Text>
                                     )}
                                 </TouchableOpacity>
@@ -294,9 +333,22 @@ export default function SettingsScreen() {
                     </View>
                 ) : (
                     <>
-                        <Text style={styles.text}>No active model selected</Text>
+                        <Text style={styles.text}>
+                            {activeProvider === 'cloud'
+                                ? 'No local fallback model selected'
+                                : 'No active model selected'}
+                        </Text>
                         {installedModels.length > 0 && (
-                            <Text style={styles.smallText}>Select an installed model below to activate it.</Text>
+                            <Text style={styles.smallText}>
+                                {activeProvider === 'cloud'
+                                    ? 'Optional: select one below for offline fallback.'
+                                    : 'Select an installed model below to activate it.'}
+                            </Text>
+                        )}
+                        {installedModels.length === 0 && (
+                            <Text style={styles.smallText}>
+                                Install a local model below to enable offline chat.
+                            </Text>
                         )}
                     </>
                 )}
@@ -320,7 +372,10 @@ export default function SettingsScreen() {
 
             {/* Available Models */}
             <View style={styles.section}>
-                <Text style={styles.sectionHeader}>Available Models</Text>
+                <Text style={styles.sectionHeader}>Local Models</Text>
+                <Text style={styles.smallText}>
+                    Install a model first, then activate it with “Use This Model”.
+                </Text>
 
                 {availableModels.map((model) => {
                     const installed = isModelInstalled(model.id);

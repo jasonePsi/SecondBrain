@@ -30,13 +30,31 @@ npm start
 npm run typecheck
 npm test
 npm run verify
+npm run setup:proxy
+npm run setup:all
 npm run verify:all
 ```
 
 - `typecheck`: TypeScript checks (`tsc --noEmit`)
-- `test`: deterministic hardening tests
+- `test`: deterministic hardening tests (memory/retrieval/extraction/turn-pipeline/provider utilities + model lifecycle helpers)
 - `verify`: app safety command (`typecheck` + `test`)
-- `verify:all`: app checks + backend-proxy verification (syntax + smoke tests)
+- `setup:proxy`: installs `backend-proxy` dependencies from repo root
+- `setup:all`: convenience alias for repo-wide setup tasks (currently `setup:proxy`)
+- `verify:all`: app checks + backend-proxy verification (syntax + smoke tests); self-contained from root after `npm ci`
+
+From a fresh checkout:
+
+```bash
+npm ci
+npm run verify:all
+```
+
+Notes:
+
+- `verify:all` installs backend-proxy dependencies automatically; no manual `cd backend-proxy && npm ci` needed.
+- hardening tests keep strict checks and suppress noisy Node warning spam from type-stripping/module-typeless warnings.
+- `verify:all` is the intended lightweight release gate and is what CI runs.
+- proxy smoke coverage includes health/config checks, invalid JSON/request handling, request-id traceability, and privacy-default behavior for both chat and extract routes.
 
 ## Backend Proxy Setup
 

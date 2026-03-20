@@ -8,8 +8,10 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test:hardening": "node --test --experimental-strip-types --experimental-specifier-resolution=node tests/*.test.mjs",
-    "test:proxy": "npm --prefix backend-proxy run verify",
+    "setup:proxy": "npm --prefix backend-proxy ci",
+    "setup:all": "npm run setup:proxy",
+    "test:hardening": "node --no-warnings --test --experimental-strip-types tests/*.test.mjs",
+    "test:proxy": "npm run setup:proxy && npm --prefix backend-proxy run verify",
     "test": "npm run test:hardening",
     "verify": "npm run typecheck && npm test",
     "verify:all": "npm run verify && npm run test:proxy"

@@ -24,7 +24,7 @@ Required backend env vars:
 - `OPENAI_PROXY_PORT` (default: `8787`)
 - `OPENAI_PROXY_HOST` (default: `0.0.0.0`)
 - `OPENAI_PROXY_REQUEST_TIMEOUT_MS` (default: `25000`)
-- `OPENAI_PROXY_DEFAULT_PRIVACY_MODE` (default: `minimal`)
+- `OPENAI_PROXY_DEFAULT_PRIVACY_MODE` (default: `minimal`; allowed: `minimal`, `standard`, `debug`)
 - `OPENAI_PROXY_DEFAULT_STORE` (default: `false`)
 
 ## 2) Point mobile app to proxy
@@ -46,6 +46,10 @@ Open **Settings -> AI Provider** and select:
 - `OpenAI (Cloud via Proxy)` when backend is available
 
 If the backend is unavailable or not configured, cloud selection is disabled with a reason.
+Cloud switch attempts re-check live health and show actionable detail codes/traces when unavailable.
+
+If cloud is selected but unavailable during startup, the app routes to Settings and surfaces the provider reason there.
+Provider health mapping is deterministic and includes stable detail codes (for example `CLOUD_PROXY_URL_MISSING`, `CLOUD_PROXY_HEALTH_HTTP_ERROR`, `CLOUD_PROXY_INVALID_HEALTH_RESPONSE`, `CLOUD_PROXY_UNREACHABLE`).
 
 ## Privacy defaults
 
@@ -55,6 +59,9 @@ The proxy request contract includes:
 - `privacy.store` (default `false`)
 
 By default, outbound calls are made in privacy-conscious mode (`store=false`) and requests are tracked via request IDs (`x-request-id`) for debugging without exposing secrets.
+Cloud/proxy logs include request IDs, model/task metadata, and payload sizes, but do not log raw note text or prompts.
+Request IDs can be supplied in either `x-request-id` or body `requestId`; when both are present, the header value is canonical.
+Mobile chat retries stay conservative and skip known non-retryable proxy failures (`PROXY_NOT_CONFIGURED`, `INVALID_REQUEST`, `INVALID_JSON`).
 
 ## Request contract (mobile -> proxy)
 
@@ -62,6 +69,8 @@ By default, outbound calls are made in privacy-conscious mode (`store=false`) an
   - `{ messages, task, requestId?, privacy? }`
 - `POST /v1/extract`
   - `{ prompt, task, requestId?, privacy? }`
+
+`GET /health` returns `ok`, `configured`, `code`, `reason?`, `requestId`, and `privacyDefaults`.
 
 Supported `task` values:
 
@@ -91,5 +100,11 @@ This includes syntax + smoke coverage for:
 - invalid payload handling
 - malformed JSON handling (`INVALID_JSON`)
 - stable error shape with `error.code`, `error.message`, and `requestId`
+- validation hint messaging for `INVALID_REQUEST` without exposing payload content
+- request ID propagation (`x-request-id` -> response `requestId`)
+- request ID parity rules for both chat and extract (`x-request-id` header is canonical when body `requestId` differs)
+- unconfigured/configured health response parity for `privacyDefaults`
+- default privacy forwarding to upstream calls (chat + extract)
+- per-request privacy override handling (chat + extract)
 
 At startup, the proxy validates config values (port/timeout/models) and fails fast on invalid settings.

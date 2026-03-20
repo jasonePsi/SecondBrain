@@ -5,6 +5,16 @@ import { Colors } from '../../src/constants/Colors';
 import { ModelManager } from '../../src/services/ModelManager';
 import { getModelById } from '../../src/constants/ModelRegistry';
 
+const toUserFacingDownloadError = (error: unknown): string => {
+    if (error instanceof Error && error.message.trim().length > 0) {
+        return error.message.trim();
+    }
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return error.trim();
+    }
+    return 'Download failed';
+};
+
 export default function DownloadScreen() {
     const router = useRouter();
     const params = useLocalSearchParams();
@@ -26,7 +36,7 @@ export default function DownloadScreen() {
 
             const modelConfig = getModelById(modelId);
             if (!modelConfig) {
-                throw new Error('Model not found');
+                throw new Error('Selected model could not be found. Return to model selection and choose again.');
             }
 
             console.log(`Starting download for ${modelConfig.name}...`);
@@ -45,7 +55,7 @@ export default function DownloadScreen() {
             }, 1500);
         } catch (err: any) {
             console.error('Download failed:', err);
-            setError(err.message || 'Download failed');
+            setError(toUserFacingDownloadError(err));
             setDownloading(false);
         }
     };
@@ -67,7 +77,7 @@ export default function DownloadScreen() {
         <View style={styles.container}>
             <View style={styles.content}>
                 <Text style={styles.title}>
-                    {complete ? 'Installed & Active' : downloading ? 'Downloading Model' : 'Download Failed'}
+                    {complete ? 'Model Ready' : downloading ? 'Installing Local Model' : 'Install Failed'}
                 </Text>
 
                 {modelConfig && (
@@ -104,7 +114,7 @@ export default function DownloadScreen() {
 
                         <Text style={styles.infoText}>
                             This may take a few minutes depending on your connection.
-                            {'\n'}Please keep the app open.
+                            {'\n'}Keep this screen open and setup will finish automatically.
                         </Text>
                     </>
                 )}
@@ -112,7 +122,7 @@ export default function DownloadScreen() {
                 {complete && (
                     <>
                         <Text style={styles.successText}>
-                            Model installed and activated. Redirecting to your app...
+                            Model is installed and active. Opening your app…
                         </Text>
                     </>
                 )}
@@ -120,7 +130,7 @@ export default function DownloadScreen() {
                 {error && (
                     <>
                         <View style={styles.errorBox}>
-                            <Text style={styles.errorText}>❌ {error}</Text>
+                            <Text style={styles.errorText}>{error}</Text>
                         </View>
 
                         <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>

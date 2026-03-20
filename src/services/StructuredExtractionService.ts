@@ -61,7 +61,8 @@ export const StructuredExtractionService = {
                 turnId: options?.turnId,
                 rawLength: raw.length,
                 opCount: parsed.ops.length,
-                droppedOpsCount: parsed.diagnostics.droppedOpsCount
+                droppedOpsCount: parsed.diagnostics.droppedOpsCount,
+                droppedReasons: parsed.diagnostics.droppedReasons.slice(0, 4)
             });
         }
         return {

@@ -21,8 +21,82 @@ const providerMap = {
     cloud: cloudProvider
 } as const;
 
+let inFlightRequests = 0;
+let deferredReleaseRequested = false;
+let releaseInProgress: Promise<void> | null = null;
+
 const getProviderImplByType = (providerType: AIProviderType) => {
     return providerMap[providerType];
+};
+
+const releaseProviders = async (): Promise<void> => {
+    await Promise.all([
+        localProvider.release(),
+        cloudProvider.release()
+    ]);
+};
+
+const runReleaseNow = async (reason: 'direct' | 'deferred'): Promise<void> => {
+    if (releaseInProgress) {
+        await releaseInProgress;
+        return;
+    }
+
+    releaseInProgress = (async () => {
+        console.log('[LLMService] releasing providers', {
+            reason,
+            inFlightRequests
+        });
+        await releaseProviders();
+    })().finally(() => {
+        releaseInProgress = null;
+    });
+
+    await releaseInProgress;
+};
+
+const flushDeferredReleaseIfIdle = async (): Promise<void> => {
+    if (!deferredReleaseRequested || inFlightRequests > 0) return;
+    deferredReleaseRequested = false;
+    await runReleaseNow('deferred');
+};
+
+const withTrackedProviderRequest = async <T>(
+    context: {
+        provider: AIProviderType;
+        task: string;
+        requestId?: string;
+    },
+    action: () => Promise<T>
+): Promise<T> => {
+    inFlightRequests += 1;
+    console.log('[LLMService] request started', {
+        provider: context.provider,
+        task: context.task,
+        requestId: context.requestId,
+        inFlightRequests
+    });
+
+    try {
+        return await action();
+    } finally {
+        inFlightRequests = Math.max(0, inFlightRequests - 1);
+        console.log('[LLMService] request finished', {
+            provider: context.provider,
+            task: context.task,
+            requestId: context.requestId,
+            inFlightRequests,
+            deferredReleaseRequested
+        });
+
+        if (inFlightRequests === 0 && deferredReleaseRequested) {
+            try {
+                await flushDeferredReleaseIfIdle();
+            } catch (error) {
+                console.warn('[LLMService] deferred release failed', error);
+            }
+        }
+    }
 };
 
 const getStoredProvider = async (): Promise<AIProviderType> => {
@@ -52,6 +126,16 @@ const normalizeError = (error: unknown, fallback: string): Error => {
     return new Error(fallback);
 };
 
+const formatProviderStatusError = (
+    status: AIProviderStatus,
+    fallback: string
+): string => {
+    const reason = status.reason?.trim() || fallback;
+    const codePrefix = status.detailCode ? `[${status.detailCode}] ` : '';
+    const traceSuffix = status.requestId ? ` (trace ${status.requestId})` : '';
+    return `${codePrefix}${reason}${traceSuffix}`;
+};
+
 export const LLMService = {
     init: async (preferredProvider?: AIProviderType): Promise<void> => {
         const providerType = await resolveProviderType(preferredProvider);
@@ -60,10 +144,14 @@ export const LLMService = {
     },
 
     release: async (): Promise<void> => {
-        await Promise.all([
-            localProvider.release(),
-            cloudProvider.release()
-        ]);
+        if (inFlightRequests > 0) {
+            deferredReleaseRequested = true;
+            console.log('[LLMService] release deferred', {
+                inFlightRequests
+            });
+            return;
+        }
+        await runReleaseNow('direct');
     },
 
     chat: async (
@@ -79,7 +167,14 @@ export const LLMService = {
             messageCount: messages.length
         });
         try {
-            return await provider.chat(messages, options);
+            return await withTrackedProviderRequest(
+                {
+                    provider: providerType,
+                    task: options?.task || 'assistant',
+                    requestId: options?.requestId
+                },
+                async () => await provider.chat(messages, options)
+            );
         } catch (error) {
             const normalized = normalizeError(error, 'Failed to generate assistant response');
             console.warn('[LLMService] chat failed', {
@@ -105,7 +200,14 @@ export const LLMService = {
             promptChars: prompt.length
         });
         try {
-            return await provider.process(prompt, options);
+            return await withTrackedProviderRequest(
+                {
+                    provider: providerType,
+                    task: options?.task || 'extraction',
+                    requestId: options?.requestId
+                },
+                async () => await provider.process(prompt, options)
+            );
         } catch (error) {
             const normalized = normalizeError(error, 'Failed to process structured output');
             console.warn('[LLMService] process failed', {
@@ -131,7 +233,9 @@ export const LLMService = {
         if (provider === 'cloud') {
             const status = await targetProvider.getStatus();
             if (!status.available) {
-                throw new Error(status.reason || 'Cloud provider is unavailable');
+                throw new Error(
+                    formatProviderStatusError(status, 'Cloud provider is unavailable')
+                );
             }
         }
 

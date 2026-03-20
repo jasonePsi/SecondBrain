@@ -18,6 +18,14 @@ const formatTimestamp = (value: number): string => {
     return new Date(value).toLocaleString();
 };
 
+const getTypeLabel = (feedType: string): string => {
+    if (feedType.startsWith('action')) return 'Reminder';
+    if (feedType === 'fact') return 'Fact';
+    if (feedType.startsWith('thread')) return 'Thread';
+    if (feedType.startsWith('space')) return 'Space';
+    return 'Activity';
+};
+
 export default function FeedScreen() {
     const router = useRouter();
     const [cards, setCards] = useState<FeedCard[]>([]);
@@ -32,7 +40,8 @@ export default function FeedScreen() {
             const next = await FeedService.listCards(undefined, 120);
             setCards(next);
         } catch (err: any) {
-            setError(err?.message || 'Could not load activity right now.');
+            console.error('Feed refresh failed:', err);
+            setError('Could not refresh activity right now.');
         } finally {
             setLoading(false);
         }
@@ -60,7 +69,8 @@ export default function FeedScreen() {
             await ActionService.setActionStatus(card.actionId, status);
             await loadFeed();
         } catch (err: any) {
-            Alert.alert('Action Update Failed', err?.message || 'Could not update this action.');
+            console.error('Action update failed:', err);
+            Alert.alert('Update Failed', 'Could not update this reminder right now.');
         } finally {
             setUpdatingActionId(null);
         }
@@ -71,11 +81,15 @@ export default function FeedScreen() {
         const cardContent = (
             <>
                 <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardBody}>{item.description}</Text>
+                <Text style={styles.typeTag}>{getTypeLabel(item.feedType)}</Text>
+                <Text style={styles.cardBody} numberOfLines={3}>{item.description}</Text>
                 {!!item.scopeLabel && (
                     <Text style={styles.cardMeta}>{item.scopeLabel}</Text>
                 )}
                 <Text style={styles.cardMeta}>{formatTimestamp(item.createdAt)}</Text>
+                {!!item.route && (
+                    <Text style={styles.routeHint}>Open context</Text>
+                )}
             </>
         );
 
@@ -94,22 +108,28 @@ export default function FeedScreen() {
 
                 {(item.canMarkDone || item.canCancel) && (
                     <View style={styles.actionRow}>
-                        <TouchableOpacity
-                            style={[styles.actionButton, styles.doneButton]}
-                            onPress={() => handleActionUpdate(item, 'done')}
-                            disabled={isActionUpdating || !item.canMarkDone}
-                        >
-                            <Text style={styles.actionButtonText}>
-                                {isActionUpdating ? 'Updating…' : 'Mark Done'}
-                            </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.actionButton, styles.cancelButton]}
-                            onPress={() => handleActionUpdate(item, 'canceled')}
-                            disabled={isActionUpdating || !item.canCancel}
-                        >
-                            <Text style={styles.actionButtonText}>Mark Canceled</Text>
-                        </TouchableOpacity>
+                        {!!item.canMarkDone && (
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.doneButton]}
+                                onPress={() => handleActionUpdate(item, 'done')}
+                                disabled={isActionUpdating}
+                            >
+                                <Text style={styles.actionButtonText}>
+                                    {isActionUpdating ? 'Saving…' : 'Mark Done'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+                        {!!item.canCancel && (
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.cancelButton]}
+                                onPress={() => handleActionUpdate(item, 'canceled')}
+                                disabled={isActionUpdating}
+                            >
+                                <Text style={styles.actionButtonText}>
+                                    {isActionUpdating ? 'Saving…' : 'Cancel'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 )}
             </View>
@@ -128,7 +148,7 @@ export default function FeedScreen() {
     if (error && cards.length === 0) {
         return (
             <View style={styles.centerState}>
-                <Text style={styles.errorText}>Could not refresh feed. {error}</Text>
+                <Text style={styles.errorText}>{error}</Text>
                 <TouchableOpacity style={styles.retryButton} onPress={loadFeed}>
                     <Text style={styles.retryButtonText}>Retry</Text>
                 </TouchableOpacity>
@@ -150,9 +170,25 @@ export default function FeedScreen() {
                         </Text>
                     </View>
                 }
-                ListHeaderComponent={error ? (
-                    <Text style={styles.inlineError}>Feed refresh issue: {error}</Text>
-                ) : null}
+                ListHeaderComponent={(
+                    <View style={styles.inlineHeaderState}>
+                        <Text style={styles.headerTitle}>Feed</Text>
+                        <Text style={styles.headerSubtitle}>
+                            Recent activity from conversations, reminders, and memory updates.
+                        </Text>
+                        {!!error && (
+                            <View style={styles.inlineWarningRow}>
+                                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                                <TouchableOpacity onPress={loadFeed}>
+                                    <Text style={styles.inlineWarningAction}>Retry</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                        {loading && cards.length > 0 && (
+                            <Text style={styles.inlineLoading}>Refreshing feed…</Text>
+                        )}
+                    </View>
+                )}
             />
             <CaptureFAB onPress={() => router.push('/space/new')} />
         </View>
@@ -210,6 +246,17 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: Colors.text
     },
+    typeTag: {
+        alignSelf: 'flex-start',
+        marginTop: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 999,
+        backgroundColor: '#EEF6FF',
+        color: Colors.primary,
+        fontSize: 11,
+        fontWeight: '600'
+    },
     cardBody: {
         marginTop: 5,
         fontSize: 14,
@@ -224,6 +271,12 @@ const styles = StyleSheet.create({
         marginTop: 10,
         flexDirection: 'row',
         gap: 8
+    },
+    routeHint: {
+        marginTop: 6,
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     actionButton: {
         paddingHorizontal: 10,
@@ -258,8 +311,39 @@ const styles = StyleSheet.create({
         color: Colors.secondaryText
     },
     inlineError: {
-        marginBottom: 8,
+        flex: 1,
         color: Colors.notification,
         fontSize: 12
+    },
+    inlineWarningRow: {
+        marginBottom: 4,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10
+    },
+    inlineWarningAction: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
+    },
+    inlineLoading: {
+        marginBottom: 8,
+        color: Colors.secondaryText,
+        fontSize: 12
+    },
+    inlineHeaderState: {
+        minHeight: 4,
+        marginBottom: 6
+    },
+    headerTitle: {
+        fontSize: 24,
+        fontWeight: '700',
+        color: Colors.text,
+        marginBottom: 2
+    },
+    headerSubtitle: {
+        color: Colors.secondaryText,
+        fontSize: 12,
+        marginBottom: 6
     }
 });

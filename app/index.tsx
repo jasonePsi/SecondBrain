@@ -10,8 +10,22 @@ type InitialRoute = '/(tabs)/spaces' | '/(tabs)/settings' | '/onboarding/model-s
 const resolveInitialRoute = async (): Promise<InitialRoute> => {
     const activeProvider = await LLMService.getActiveProvider();
     if (activeProvider === 'cloud') {
-        const cloudStatus = await LLMService.getProviderStatus('cloud');
-        return cloudStatus.available ? '/(tabs)/spaces' : '/(tabs)/settings';
+        try {
+            const cloudStatus = await LLMService.getProviderStatus('cloud');
+            if (!cloudStatus.available) {
+                console.warn('[AppBootstrap] Cloud provider unavailable during startup', {
+                    reason: cloudStatus.reason,
+                    detailCode: cloudStatus.detailCode,
+                    requestId: cloudStatus.requestId
+                });
+            }
+            return cloudStatus.available ? '/(tabs)/spaces' : '/(tabs)/settings';
+        } catch (error: any) {
+            console.warn('[AppBootstrap] Cloud status check failed during startup', {
+                message: error?.message
+            });
+            return '/(tabs)/settings';
+        }
     }
 
     const [installedModels, activeModel] = await Promise.all([
@@ -38,8 +52,8 @@ export default function Index() {
                 router.replace(nextRoute);
             } catch (error) {
                 console.error('Initialization failed:', error);
-                // Still try to continue to onboarding
-                router.replace('/onboarding/model-selection');
+                // If bootstrap fails, route to Settings so provider/model issues are actionable.
+                router.replace('/(tabs)/settings');
             }
         }
         initialize();

@@ -18,7 +18,7 @@ export default function NewSpaceScreen() {
         try {
             const id = await SpaceRepo.create(name.trim());
             await FeedRepo.create(id, 'space_created', id);
-            router.back();
+            router.replace(`/space/${id}`);
         } catch (e) {
             console.error(e);
             setError('Could not create this space. Please try again.');
@@ -42,7 +42,10 @@ export default function NewSpaceScreen() {
                     onChangeText={setName}
                     placeholder="e.g., Work, Personal, Project X"
                     autoFocus
+                    returnKeyType="done"
+                    onSubmitEditing={handleCreate}
                 />
+                <Text style={styles.helperText}>You can rename this later.</Text>
                 {!!error && <Text style={styles.errorText}>{error}</Text>}
 
                 <TouchableOpacity
@@ -98,5 +101,11 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         color: Colors.notification,
         fontSize: 13
+    },
+    helperText: {
+        marginTop: -16,
+        marginBottom: 14,
+        fontSize: 12,
+        color: Colors.secondaryText
     }
 });

@@ -76,7 +76,11 @@ export const validateOps = (input: unknown): {
 
     const validOps: ValidatedStructuredOp[] = [];
     const droppedReasons: string[] = [];
+    const rawOpsCount = input.length;
     const sliced = input.slice(0, MAX_OPS);
+    if (rawOpsCount > MAX_OPS && droppedReasons.length < MAX_DIAGNOSTIC_REASONS) {
+        droppedReasons.push('ops_truncated');
+    }
 
     for (const rawOp of sliced) {
         if (!rawOp || typeof rawOp !== 'object') {
@@ -158,9 +162,9 @@ export const validateOps = (input: unknown): {
     return {
         ops: validOps,
         diagnostics: {
-            rawOpsCount: input.length,
+            rawOpsCount,
             acceptedOpsCount: validOps.length,
-            droppedOpsCount: Math.max(0, input.length - validOps.length),
+            droppedOpsCount: Math.max(0, rawOpsCount - validOps.length),
             droppedReasons
         }
     };
