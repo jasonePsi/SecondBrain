@@ -24,7 +24,7 @@ export default function SpacesScreen() {
       setSpaces(data);
     } catch (err: any) {
       console.error('Failed to load spaces:', err);
-      setError('Could not load spaces right now.');
+      setError('We could not load your spaces.');
     } finally {
       setLoading(false);
     }
@@ -158,7 +158,7 @@ export default function SpacesScreen() {
       <View style={styles.container}>
         <Stack.Screen options={{ title: 'Spaces' }} />
         <View style={styles.fullState}>
-          <Text style={styles.errorStateText}>Could not load spaces right now.</Text>
+          <Text style={styles.errorStateText}>We could not load your spaces.</Text>
           <Text style={styles.errorStateSubtext}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadSpaces}>
             <Text style={styles.retryButtonText}>Retry</Text>
@@ -187,6 +187,7 @@ export default function SpacesScreen() {
       <FlashList
         data={spaces}
         renderItem={renderItem}
+        keyExtractor={(item) => item.id}
         extraData={isEditing}
         ListEmptyComponent={(
           loading ? (
@@ -196,7 +197,7 @@ export default function SpacesScreen() {
             </View>
           ) : (
             <View style={styles.centerState}>
-              <Text style={styles.empty}>No spaces yet. Create one to get started.</Text>
+              <Text style={styles.empty}>No spaces yet. Create your first space to get started.</Text>
               <TouchableOpacity style={styles.emptyActionButton} onPress={() => router.push('/space/new')}>
                 <Text style={styles.emptyActionText}>Create Space</Text>
               </TouchableOpacity>
@@ -207,7 +208,7 @@ export default function SpacesScreen() {
           <View>
             {!!error && (
               <View style={styles.inlineWarningRow}>
-                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                <Text style={styles.inlineError}>Refresh issue: {error}</Text>
                 <TouchableOpacity onPress={loadSpaces}>
                   <Text style={styles.inlineWarningAction}>Retry</Text>
                 </TouchableOpacity>

@@ -27,6 +27,7 @@ import { TurnPostProcessingService } from '../../src/services/TurnPostProcessing
 import {
     getAssistantFallbackReplyForStage,
     getUserFacingTurnErrorForStage,
+    isCloudAssistantReplyFailureStage,
     logTurnPostProcessingStage,
     logTurnStageTransition,
     shouldBlockSendForThread,
@@ -37,6 +38,14 @@ import {
 } from '../../src/services/assistant_turn_utils';
 
 type SupportedSpeechLanguage = 'el-GR' | 'en-US';
+type TurnProvider = 'local' | 'cloud';
+type InFlightTurnState = {
+    threadId: string;
+    turnId: string;
+    stage: TurnStage;
+    provider?: TurnProvider;
+    startedAt: number;
+};
 
 const MESSAGE_PAGE_SIZE = 50;
 
@@ -109,6 +118,18 @@ const toUserFacingProviderMessage = (error: unknown): string => {
         if (detailCode === 'CLOUD_PROXY_HEALTH_HTTP_ERROR') {
             return 'Cloud proxy health check failed. Verify proxy URL and server status.';
         }
+        if (detailCode === 'CLOUD_PROVIDER_STATUS_CHECK_FAILED') {
+            return 'Cloud availability check failed. Verify proxy URL/network and retry.';
+        }
+        if (detailCode === 'LOCAL_MODEL_NOT_SELECTED') {
+            return 'No active local model is selected. Choose one in Settings.';
+        }
+        if (detailCode === 'LOCAL_MODEL_FILE_MISSING') {
+            return 'Active local model file is missing. Reinstall or switch models in Settings.';
+        }
+        if (detailCode === 'LOCAL_PROVIDER_STATUS_CHECK_FAILED') {
+            return 'Local model status check failed. Open Settings and retry model setup.';
+        }
         if (/timed out/i.test(withoutCodeAndTrace)) {
             return 'Cloud request timed out. Check network/proxy latency and try again.';
         }
@@ -140,7 +161,7 @@ export default function ThreadScreen() {
     const postProcessingQueueRef = useRef<Promise<void>>(Promise.resolve());
     const isMountedRef = useRef(true);
     const activeThreadIdRef = useRef<string | null>(id || null);
-    const inFlightTurnRef = useRef<{ threadId: string; turnId: string } | null>(null);
+    const inFlightTurnRef = useRef<InFlightTurnState | null>(null);
     const [micStatus, setMicStatus] = useState('Microphone ready');
     const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
     const lastJumpedMessageIdRef = useRef<string | null>(null);
@@ -155,6 +176,7 @@ export default function ThreadScreen() {
 
     const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
     const [renameValue, setRenameValue] = useState('');
+    const composerDisabled = isLoading || retryingProvider;
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -382,6 +404,12 @@ export default function ThreadScreen() {
         if (!id) return;
         const userMessage = inputText.trim();
         if (!userMessage) return;
+        if (retryingProvider) {
+            if (isCurrentThreadActive(id)) {
+                setMicStatus('Retrying AI connection…');
+            }
+            return;
+        }
         if (llmInitError && !llmReady) {
             Alert.alert(
                 'AI Unavailable',
@@ -398,10 +426,12 @@ export default function ThreadScreen() {
             console.log('[ThreadTurn] send ignored', {
                 threadId: id,
                 reason: isLoading ? 'loading' : 'in_flight_turn',
-                inFlightTurnId: inFlightTurnRef.current?.turnId || null
+                inFlightTurnId: inFlightTurnRef.current?.turnId || null,
+                inFlightStage: inFlightTurnRef.current?.stage || null,
+                inFlightProvider: inFlightTurnRef.current?.provider || null
             });
             if (isCurrentThreadActive(id)) {
-                setMicStatus('Assistant is still replying…');
+                setMicStatus('Assistant is still replying. Please wait…');
             }
             return;
         }
@@ -414,7 +444,16 @@ export default function ThreadScreen() {
         let turnOutcome: 'completed' | 'failed' = 'completed';
         let userMessagePersisted = false;
         let assistantMessagePersisted = false;
-        let activeProvider: 'local' | 'cloud' | undefined;
+        let activeProvider: TurnProvider | undefined;
+        const syncInFlightTurn = (patch: Partial<InFlightTurnState>) => {
+            const current = inFlightTurnRef.current;
+            if (!current) return;
+            if (current.turnId !== turnId || current.threadId !== threadId) return;
+            inFlightTurnRef.current = {
+                ...current,
+                ...patch
+            };
+        };
         const advanceStage = (next: TurnStage, detail?: string): TurnStage => {
             turnStage = logTurnStageTransition(turnStage, next, {
                 turnId,
@@ -422,10 +461,36 @@ export default function ThreadScreen() {
                 provider: activeProvider,
                 detail
             });
+            syncInFlightTurn({
+                stage: turnStage,
+                provider: activeProvider
+            });
             return turnStage;
         };
+        const refreshMessagesAfterMutation = async (
+            stage: TurnStage,
+            detail: string
+        ): Promise<void> => {
+            try {
+                await refreshLoadedMessages(threadId, refreshTargetCount);
+            } catch (error: any) {
+                console.warn('[ThreadTurn] refresh after mutation failed', {
+                    turnId,
+                    threadId,
+                    stage,
+                    detail,
+                    message: error?.message
+                });
+            }
+        };
 
-        inFlightTurnRef.current = { threadId, turnId };
+        inFlightTurnRef.current = {
+            threadId,
+            turnId,
+            stage: TURN_STAGES.START,
+            provider: activeProvider,
+            startedAt: turnStartedAt
+        };
         const canApplyTurnState = (): boolean => isCurrentThreadActive(threadId);
         setInputText('');
         setTranscriptBuffer('');
@@ -456,10 +521,16 @@ export default function ThreadScreen() {
             advanceStage(TURN_STAGES.PERSIST_USER_MESSAGE);
             await MessageRepo.create(threadId, 'user', userMessage, { turnId });
             userMessagePersisted = true;
-            await refreshLoadedMessages(threadId, refreshTargetCount);
+            await refreshMessagesAfterMutation(TURN_STAGES.PERSIST_USER_MESSAGE, 'user_message_persisted');
 
             advanceStage(TURN_STAGES.RESOLVE_PROVIDER);
             activeProvider = await LLMService.resolveProviderForTurn();
+            syncInFlightTurn({ provider: activeProvider });
+            console.log('[ThreadTurn] provider resolved', {
+                turnId,
+                threadId,
+                provider: activeProvider
+            });
 
             advanceStage(TURN_STAGES.INIT_PROVIDER);
             await LLMService.init(activeProvider);
@@ -484,7 +555,10 @@ export default function ThreadScreen() {
             advanceStage(TURN_STAGES.PERSIST_ASSISTANT_REPLY);
             await MessageRepo.create(threadId, 'assistant', assistantReply, { turnId, provider: activeProvider });
             assistantMessagePersisted = true;
-            await refreshLoadedMessages(threadId, refreshTargetCount);
+            await refreshMessagesAfterMutation(
+                TURN_STAGES.PERSIST_ASSISTANT_REPLY,
+                'assistant_message_persisted'
+            );
 
             advanceStage(TURN_STAGES.QUEUE_POST_PROCESSING);
             logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.QUEUED, {
@@ -534,11 +608,19 @@ export default function ThreadScreen() {
                         postProcessResult.executionReport.executedCount > 0 ||
                         postProcessResult.summary.updated
                     ) {
-                        const latestThread = await ThreadRepo.get(threadId);
-                        if (latestThread) {
-                            setThreadTitle((current) => (
-                                current === latestThread.title ? current : latestThread.title
-                            ));
+                        try {
+                            const latestThread = await ThreadRepo.get(threadId);
+                            if (latestThread) {
+                                setThreadTitle((current) => (
+                                    current === latestThread.title ? current : latestThread.title
+                                ));
+                            }
+                        } catch (error: any) {
+                            console.warn('[ThreadTurn] post-processing UI refresh failed', {
+                                turnId,
+                                threadId,
+                                message: error?.message
+                            });
                         }
                     }
                 })
@@ -567,7 +649,7 @@ export default function ThreadScreen() {
             });
         } catch (error: any) {
             turnOutcome = 'failed';
-            const failedAtStage = turnStage;
+            const failedAtStage: TurnStage = turnStage;
             advanceStage(TURN_STAGES.FAILED, error?.message);
             console.error('[ThreadTurn] failed', {
                 turnId,
@@ -585,8 +667,11 @@ export default function ThreadScreen() {
                         getAssistantFallbackReplyForStage(failedAtStage),
                         { turnId, fallback: true, stage: failedAtStage, provider: activeProvider }
                     );
-                    await refreshLoadedMessages(threadId, refreshTargetCount);
                     assistantMessagePersisted = true;
+                    await refreshMessagesAfterMutation(
+                        TURN_STAGES.FAILED,
+                        'assistant_fallback_persisted'
+                    );
                 } catch (fallbackError: any) {
                     console.error('[ThreadTurn] fallback assistant message failed', {
                         turnId,
@@ -600,12 +685,13 @@ export default function ThreadScreen() {
             }
 
             const providerErrorMessage = toUserFacingProviderMessage(error);
+            const isCloudGenerationFailure = isCloudAssistantReplyFailureStage(
+                activeProvider,
+                failedAtStage
+            );
             const isProviderIssue =
                 shouldResetProviderReadinessForStage(failedAtStage)
-                || (
-                    activeProvider === 'cloud'
-                    && failedAtStage === TURN_STAGES.GENERATE_ASSISTANT_REPLY
-                );
+                || isCloudGenerationFailure;
             if (shouldResetProviderReadinessForStage(failedAtStage)) {
                 if (canApplyTurnState()) {
                     setLlmReady(false);
@@ -613,8 +699,7 @@ export default function ThreadScreen() {
                 }
             } else if (
                 canApplyTurnState()
-                && activeProvider === 'cloud'
-                && failedAtStage === TURN_STAGES.GENERATE_ASSISTANT_REPLY
+                && isCloudGenerationFailure
             ) {
                 // Keep cloud failure reason visible in-thread so retries are actionable.
                 setLlmInitError(providerErrorMessage);
@@ -672,11 +757,12 @@ export default function ThreadScreen() {
     const retryInitializeProvider = useCallback(async () => {
         try {
             setRetryingProvider(true);
+            setMicStatus('Retrying AI connection…');
             setLlmInitError(null);
             await LLMService.init();
             if (!isMountedRef.current) return;
             setLlmReady(true);
-            setMicStatus('Microphone ready');
+            setMicStatus('AI ready');
         } catch (error) {
             if (!isMountedRef.current) return;
             setLlmReady(false);
@@ -827,15 +913,18 @@ export default function ThreadScreen() {
                     <>
                         {hasOlderMessages ? (
                             <TouchableOpacity
-                                style={styles.loadOlderButton}
-                                onPress={loadOlderMessages}
-                                disabled={loadingOlderMessages}
-                            >
-                                {loadingOlderMessages ? (
+                            style={styles.loadOlderButton}
+                            onPress={loadOlderMessages}
+                            disabled={loadingOlderMessages}
+                        >
+                            {loadingOlderMessages ? (
+                                <View style={styles.loadOlderLoadingRow}>
                                     <ActivityIndicator size="small" color={Colors.primary} />
-                                ) : (
-                                    <Text style={styles.loadOlderText}>Load earlier messages ({remaining} remaining)</Text>
-                                )}
+                                    <Text style={styles.loadOlderLoadingText}>Loading earlier messages…</Text>
+                                </View>
+                            ) : (
+                                <Text style={styles.loadOlderText}>Load earlier messages ({remaining} remaining)</Text>
+                            )}
                             </TouchableOpacity>
                         ) : (
                             <Text style={styles.historyInfoText}>All messages loaded</Text>
@@ -878,7 +967,6 @@ export default function ThreadScreen() {
                             ref={flashListRef}
                             data={messages}
                             keyExtractor={(item) => item.id}
-                            estimatedItemSize={110}
                             renderItem={renderItem}
                             contentContainerStyle={{ padding: 16 }}
                             ListHeaderComponent={renderListHeader}
@@ -889,6 +977,7 @@ export default function ThreadScreen() {
                 <View style={styles.inputContainer}>
                     {!!llmInitError && (
                         <View style={styles.llmErrorBanner}>
+                            <Text style={styles.llmErrorTitle}>AI is currently unavailable</Text>
                             <Text style={styles.llmErrorText}>{llmInitError}</Text>
                             <View style={styles.llmErrorActionsRow}>
                                 <TouchableOpacity onPress={retryInitializeProvider} disabled={retryingProvider}>
@@ -905,6 +994,9 @@ export default function ThreadScreen() {
                     {isLoading && (
                         <Text style={styles.turnStatusText}>Assistant is replying…</Text>
                     )}
+                    {retryingProvider && !isLoading && (
+                        <Text style={styles.turnStatusText}>Reconnecting AI…</Text>
+                    )}
                     {micStatus !== 'Microphone ready' && (
                         <Text style={styles.micStatusText}>{micStatus}</Text>
                     )}
@@ -916,6 +1008,8 @@ export default function ThreadScreen() {
                             placeholder={
                                 llmInitError && !llmReady
                                     ? 'AI unavailable. Open settings to fix provider/model setup'
+                                    : retryingProvider
+                                    ? 'Retrying AI connection…'
                                     : isLoading
                                     ? 'Generating reply…'
                                     : isRecording
@@ -924,27 +1018,27 @@ export default function ThreadScreen() {
                             }
                             placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
                             multiline
-                            editable={!isLoading}
+                            editable={!composerDisabled}
                         />
                         <TouchableOpacity
                             onPress={toggleLanguage}
                             style={styles.langButton}
-                            disabled={isLoading}
+                            disabled={composerDisabled}
                         >
                             <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             onPress={toggleRecording}
                             style={[styles.micButton, isRecording && styles.micActive]}
-                            disabled={isLoading}
+                            disabled={composerDisabled}
                         >
                             <Ionicons
                                 name={isRecording ? 'stop' : 'mic'}
                                 size={28}
-                                color={isRecording ? 'white' : (isLoading ? Colors.secondaryText : Colors.primary)}
+                                color={isRecording ? 'white' : (composerDisabled ? Colors.secondaryText : Colors.primary)}
                             />
                         </TouchableOpacity>
-                        {isLoading ? (
+                        {composerDisabled ? (
                             <View style={styles.sendButton}>
                                 <ActivityIndicator size="small" color={Colors.primary} />
                             </View>
@@ -1056,6 +1150,16 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600'
     },
+    loadOlderLoadingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8
+    },
+    loadOlderLoadingText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
+    },
     historyInfoText: {
         fontSize: 12,
         color: Colors.secondaryText
@@ -1087,6 +1191,12 @@ const styles = StyleSheet.create({
     llmErrorText: {
         color: '#991B1B',
         fontSize: 12
+    },
+    llmErrorTitle: {
+        color: '#7F1D1D',
+        fontSize: 12,
+        fontWeight: '700',
+        marginBottom: 2
     },
     llmErrorAction: {
         marginTop: 4,

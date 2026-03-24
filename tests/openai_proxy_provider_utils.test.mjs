@@ -8,6 +8,30 @@ import {
 } from '../src/services/providers/openai_proxy_error_utils.ts';
 import { OpenAIProxyProvider } from '../src/services/providers/OpenAIProxyProvider.ts';
 
+const withMutedConsole = (fn) => {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = () => {};
+  console.warn = () => {};
+
+  try {
+    const value = fn();
+    if (value && typeof value.then === 'function') {
+      return value.finally(() => {
+        console.log = originalLog;
+        console.warn = originalWarn;
+      });
+    }
+    console.log = originalLog;
+    console.warn = originalWarn;
+    return value;
+  } catch (error) {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    throw error;
+  }
+};
+
 test('parseProxyErrorPayload supports nested and flat JSON error shapes', () => {
   const nested = parseProxyErrorPayload('{"error":{"code":"UPSTREAM","message":"Proxy failed"}}');
   assert.equal(nested?.code, 'UPSTREAM');
@@ -75,10 +99,12 @@ test('OpenAIProxyProvider.init surfaces detail code and trace for unavailable cl
     requestId: 'trace-abc'
   });
 
-  await assert.rejects(
-    () => provider.init(),
-    /\[PROXY_NOT_CONFIGURED\] OPENAI_API_KEY is not configured \(trace trace-abc\)/
-  );
+  await withMutedConsole(async () => {
+    await assert.rejects(
+      () => provider.init(),
+      /\[PROXY_NOT_CONFIGURED\] OPENAI_API_KEY is not configured \(trace trace-abc\)/
+    );
+  });
 });
 
 test('OpenAIProxyProvider.init falls back to stable generic message when reason is missing', async () => {
@@ -90,8 +116,187 @@ test('OpenAIProxyProvider.init falls back to stable generic message when reason 
     configured: true
   });
 
-  await assert.rejects(
-    () => provider.init(),
-    /Cloud provider is unavailable/
-  );
+  await withMutedConsole(async () => {
+    await assert.rejects(
+      () => provider.init(),
+      /Cloud provider is unavailable/
+    );
+  });
+});
+
+test('OpenAIProxyProvider.chat surfaces request id on transport failure for traceability', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:9999';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    throw new Error('network unreachable');
+  };
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.chat(
+          [{ role: 'user', content: 'hello' }],
+          {
+            requestId: 'turn-trace-123',
+            timeoutMs: 50,
+            task: 'assistant'
+          }
+        ),
+        /request turn-trace-123/
+      );
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.chat does not retry when proxy marks failure as non-retryable', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 'PROXY_NOT_CONFIGURED',
+          message: 'Cloud provider is not configured on the server'
+        },
+        requestId: 'proxy-req-1'
+      }),
+      {
+        status: 503,
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': 'proxy-req-1'
+        }
+      }
+    );
+  };
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.chat(
+          [{ role: 'user', content: 'hello' }],
+          {
+            requestId: 'turn-no-retry',
+            timeoutMs: 50,
+            task: 'assistant'
+          }
+        ),
+        /\[PROXY_NOT_CONFIGURED\]/
+      );
+    });
+    assert.equal(fetchCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.chat retries transient proxy failures once and succeeds', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    if (fetchCalls === 1) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'UPSTREAM_CHAT_FAILED',
+            message: 'OpenAI upstream timeout'
+          },
+          requestId: 'proxy-retry-1'
+        }),
+        {
+          status: 503,
+          headers: {
+            'content-type': 'application/json',
+            'x-request-id': 'proxy-retry-1'
+          }
+        }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        text: 'retry success',
+        requestId: 'proxy-retry-2'
+      }),
+      {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': 'proxy-retry-2'
+        }
+      }
+    );
+  };
+
+  try {
+    const reply = await withMutedConsole(() => provider.chat(
+      [{ role: 'user', content: 'hello' }],
+      {
+        requestId: 'turn-retry',
+        timeoutMs: 50,
+        task: 'assistant'
+      }
+    ));
+    assert.equal(reply, 'retry success');
+    assert.equal(fetchCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.process keeps extraction retries disabled by default', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 'UPSTREAM_EXTRACT_FAILED',
+          message: 'Extract upstream timeout'
+        },
+        requestId: 'proxy-extract-1'
+      }),
+      {
+        status: 503,
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': 'proxy-extract-1'
+        }
+      }
+    );
+  };
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.process(
+          'extract this text',
+          {
+            requestId: 'turn-extract',
+            timeoutMs: 50,
+            task: 'extraction'
+          }
+        ),
+        /\[UPSTREAM_EXTRACT_FAILED\]/
+      );
+    });
+    assert.equal(fetchCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

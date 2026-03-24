@@ -38,6 +38,21 @@ export default function SettingsScreen() {
         return '';
     };
 
+    const formatCheckTime = (value?: number): string => {
+        if (!value) return '';
+        return new Date(value).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    };
+
+    const upsertProviderStatus = (status: AIProviderStatus) => {
+        setProviderStatuses((prev) => {
+            const others = prev.filter((item) => item.provider !== status.provider);
+            return [...others, status];
+        });
+    };
+
     const loadData = async () => {
         try {
             setLoading(true);
@@ -83,10 +98,10 @@ export default function SettingsScreen() {
         status: AIProviderStatus | undefined,
         isActive: boolean
     ): string => {
-        if (!status) return isActive ? 'Selected · Status Unknown' : 'Status Unknown';
-        if (!status?.configured) return isActive ? 'Selected · Not Configured' : 'Not Configured';
-        if (isActive && status?.available === false) return 'Selected · Unavailable';
-        if (isActive) return 'Selected';
+        if (!status) return isActive ? 'Active · Checking' : 'Checking';
+        if (!status?.configured) return isActive ? 'Active · Setup Needed' : 'Setup Needed';
+        if (isActive && status?.available === false) return 'Active · Unavailable';
+        if (isActive) return 'Active';
         if (status?.available) return 'Available';
         return 'Unavailable';
     };
@@ -94,25 +109,42 @@ export default function SettingsScreen() {
     const handleSwitchProvider = async (provider: AIProviderType) => {
         try {
             setSwitchingProvider(provider);
+            const runtimeState = LLMService.getRuntimeState();
+            const latestStatus = await LLMService.getProviderStatus(provider);
+            upsertProviderStatus(latestStatus);
+
             if (provider === 'cloud') {
-                const latestCloudStatus = await LLMService.getProviderStatus('cloud');
-                setProviderStatuses((prev) => {
-                    const others = prev.filter((item) => item.provider !== 'cloud');
-                    return [...others, latestCloudStatus];
-                });
-                if (!latestCloudStatus.available) {
-                    setLoadError(formatProviderReason(latestCloudStatus));
-                    throw new Error(formatProviderReason(latestCloudStatus));
+                if (!latestStatus.available) {
+                    setLoadError(formatProviderReason(latestStatus));
+                    throw new Error(formatProviderReason(latestStatus));
                 }
             }
+
             await LLMService.setActiveProvider(provider);
-            setLoadError(null);
-            Alert.alert(
-                'Provider Updated',
-                provider === 'cloud'
-                    ? 'Cloud provider is now active.'
-                    : 'Local provider is now active.'
-            );
+            const refreshedStatus = await LLMService.getProviderStatus(provider);
+            upsertProviderStatus(refreshedStatus);
+
+            const releaseNotice = runtimeState.inFlightRequests > 0
+                ? ' Current in-flight reply will finish first; switch applies to the next turn.'
+                : '';
+            if (!refreshedStatus.available) {
+                const reason = formatProviderReason(refreshedStatus);
+                setLoadError(reason);
+                Alert.alert(
+                    'Provider Updated',
+                    provider === 'local'
+                        ? `Local provider selected, but setup is still required. ${reason}${releaseNotice}`
+                        : `Provider selected, but currently unavailable. ${reason}${releaseNotice}`
+                );
+            } else {
+                setLoadError(null);
+                Alert.alert(
+                    'Provider Updated',
+                    provider === 'cloud'
+                        ? `Cloud provider is now active.${releaseNotice}`
+                        : `Local provider is now active.${releaseNotice}`
+                );
+            }
         } catch (error: any) {
             Alert.alert('Provider Unavailable', error.message || 'Could not switch provider.');
         } finally {
@@ -150,7 +182,14 @@ export default function SettingsScreen() {
 
             await ModelManager.setActiveModel(modelId);
             await LLMService.release();
-            Alert.alert('Model Active', 'This model is now active.');
+            if (activeProvider === 'cloud') {
+                Alert.alert(
+                    'Fallback Updated',
+                    'Local fallback model updated. Cloud provider remains active.'
+                );
+            } else {
+                Alert.alert('Model Active', 'This model is now active.');
+            }
             await loadData();
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Failed to switch model');
@@ -290,6 +329,11 @@ export default function SettingsScreen() {
                             {status && (!status.available || !status.configured || !!status.reason) && (
                                 <Text style={styles.providerReason}>{formatProviderReason(status)}</Text>
                             )}
+                            {!!status?.lastCheckedAt && (
+                                <Text style={styles.providerCheckedAt}>
+                                    Last checked {formatCheckTime(status.lastCheckedAt)}
+                                </Text>
+                            )}
                             {!status && (
                                 <Text style={styles.providerReason}>Status not loaded yet. Tap Retry above.</Text>
                             )}
@@ -321,7 +365,9 @@ export default function SettingsScreen() {
 
             {/* Active Model Section */}
             <View style={styles.section}>
-                <Text style={styles.sectionHeader}>Active Model</Text>
+                <Text style={styles.sectionHeader}>
+                    {activeProvider === 'cloud' ? 'Local Fallback Model' : 'Active Local Model'}
+                </Text>
                 {activeModel ? (
                     <View style={styles.activeModelCard}>
                         <Text style={styles.activeModelName}>
@@ -354,7 +400,7 @@ export default function SettingsScreen() {
                 )}
                 {activeProvider === 'cloud' && (
                     <Text style={styles.smallText}>
-                        Cloud is selected. Local models stay installed for offline fallback.
+                        Cloud is selected. This model is used when you switch to Local mode.
                     </Text>
                 )}
             </View>
@@ -374,7 +420,9 @@ export default function SettingsScreen() {
             <View style={styles.section}>
                 <Text style={styles.sectionHeader}>Local Models</Text>
                 <Text style={styles.smallText}>
-                    Install a model first, then activate it with “Use This Model”.
+                    {activeProvider === 'cloud'
+                        ? 'Install local models for offline fallback, then set one as fallback.'
+                        : 'Install a model first, then activate it with “Use This Model”.'}
                 </Text>
 
                 {availableModels.map((model) => {
@@ -431,7 +479,9 @@ export default function SettingsScreen() {
                                                     style={styles.switchButton}
                                                     onPress={() => handleSwitchModel(model.id)}
                                                 >
-                                                    <Text style={styles.switchButtonText}>Use This Model</Text>
+                                                    <Text style={styles.switchButtonText}>
+                                                        {activeProvider === 'cloud' ? 'Set as Fallback' : 'Use This Model'}
+                                                    </Text>
                                                 </TouchableOpacity>
                                             )}
                                             <TouchableOpacity
@@ -553,6 +603,11 @@ const styles = StyleSheet.create({
     providerReason: {
         fontSize: 12,
         color: Colors.notification,
+        marginBottom: 8
+    },
+    providerCheckedAt: {
+        fontSize: 11,
+        color: Colors.secondaryText,
         marginBottom: 8
     },
     providerBadge: {

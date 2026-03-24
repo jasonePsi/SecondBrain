@@ -19,11 +19,26 @@ const formatTimestamp = (value: number): string => {
 };
 
 const getTypeLabel = (feedType: string): string => {
+    if (feedType === 'action_done') return 'Reminder Completed';
+    if (feedType === 'action_canceled') return 'Reminder Canceled';
+    if (feedType === 'action_snoozed') return 'Reminder Snoozed';
+    if (feedType === 'action_scheduled') return 'Reminder Scheduled';
+    if (feedType === 'thread_updated') return 'Thread Updated';
+    if (feedType === 'thread_created') return 'Thread Created';
+    if (feedType === 'space_created') return 'Space Created';
     if (feedType.startsWith('action')) return 'Reminder';
     if (feedType === 'fact') return 'Fact';
     if (feedType.startsWith('thread')) return 'Thread';
     if (feedType.startsWith('space')) return 'Space';
     return 'Activity';
+};
+
+const toActionStatusLabel = (status?: FeedCard['actionStatus']): string | null => {
+    if (!status) return null;
+    if (status === 'open') return 'Open';
+    if (status === 'done') return 'Done';
+    if (status === 'canceled') return 'Canceled';
+    return null;
 };
 
 export default function FeedScreen() {
@@ -86,9 +101,12 @@ export default function FeedScreen() {
                 {!!item.scopeLabel && (
                     <Text style={styles.cardMeta}>{item.scopeLabel}</Text>
                 )}
+                {!!toActionStatusLabel(item.actionStatus) && (
+                    <Text style={styles.cardMeta}>Status: {toActionStatusLabel(item.actionStatus)}</Text>
+                )}
                 <Text style={styles.cardMeta}>{formatTimestamp(item.createdAt)}</Text>
                 {!!item.route && (
-                    <Text style={styles.routeHint}>Open context</Text>
+                    <Text style={styles.routeHint}>Open related context</Text>
                 )}
             </>
         );
@@ -161,6 +179,7 @@ export default function FeedScreen() {
             <FlashList
                 data={cards}
                 renderItem={renderItem}
+                keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
                     <View style={styles.emptyState}>
@@ -168,6 +187,12 @@ export default function FeedScreen() {
                         <Text style={styles.emptyText}>
                             Start a conversation or capture a reminder. Your recent activity will appear here.
                         </Text>
+                        <TouchableOpacity
+                            style={styles.emptyActionButton}
+                            onPress={() => router.push('/(tabs)/spaces')}
+                        >
+                            <Text style={styles.emptyActionText}>Go to Spaces</Text>
+                        </TouchableOpacity>
                     </View>
                 }
                 ListHeaderComponent={(
@@ -309,6 +334,19 @@ const styles = StyleSheet.create({
         fontSize: 14,
         textAlign: 'center',
         color: Colors.secondaryText
+    },
+    emptyActionButton: {
+        marginTop: 12,
+        borderWidth: 1,
+        borderColor: Colors.primary,
+        borderRadius: 999,
+        paddingHorizontal: 12,
+        paddingVertical: 7
+    },
+    emptyActionText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     inlineError: {
         flex: 1,

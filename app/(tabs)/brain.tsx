@@ -62,14 +62,14 @@ export default function BrainScreen() {
             disabled={!entity.route}
         >
             <View style={styles.cardRow}>
-                <Text style={styles.cardTitle}>{entity.name}</Text>
+                <Text style={styles.cardTitle} numberOfLines={1}>{entity.name}</Text>
                 <Text style={styles.cardTag}>{entity.type}</Text>
             </View>
             <Text style={styles.cardMeta}>Scope: {entity.scopeLabel}</Text>
             <Text style={styles.cardMeta}>Captured {formatTimestamp(entity.createdAt)}</Text>
             {!!entity.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Text style={styles.routeHintText}>Open related context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -84,7 +84,7 @@ export default function BrainScreen() {
             disabled={!fact.route}
         >
             <Text style={styles.cardTitle}>{fact.key}</Text>
-            <Text style={styles.cardBody}>
+            <Text style={styles.cardBody} numberOfLines={3}>
                 {fact.value}
                 {fact.unit ? ` ${fact.unit}` : ''}
             </Text>
@@ -92,7 +92,7 @@ export default function BrainScreen() {
             <Text style={styles.cardMeta}>Updated {formatTimestamp(fact.effectiveAt)}</Text>
             {!!fact.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Text style={styles.routeHintText}>Open related context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -107,12 +107,12 @@ export default function BrainScreen() {
             disabled={!action.route}
         >
             <View style={styles.cardRow}>
-                <Text style={styles.cardTitle}>{action.text}</Text>
+                <Text style={styles.cardTitle} numberOfLines={2}>{action.text}</Text>
                 <Text style={[
                     styles.statusTag,
                     action.status === 'open' ? styles.statusOpen : styles.statusClosed
                 ]}>
-                    {action.status}
+                    {action.status === 'open' ? 'Open' : action.status}
                 </Text>
             </View>
             <Text style={styles.cardMeta}>Scope: {action.scopeLabel}</Text>
@@ -123,7 +123,7 @@ export default function BrainScreen() {
             </Text>
             {!!action.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open context</Text>
+                    <Text style={styles.routeHintText}>Open related context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -202,6 +202,7 @@ export default function BrainScreen() {
 
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Entities ({entities.length})</Text>
+                <Text style={styles.sectionHint}>People, places, and named things from your conversations.</Text>
                 {entities.length === 0
                     ? <Text style={styles.emptyText}>No entities yet. Keep chatting and memory extraction will populate this section.</Text>
                     : entities.map(renderEntity)}
@@ -209,13 +210,15 @@ export default function BrainScreen() {
 
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Facts ({facts.length})</Text>
+                <Text style={styles.sectionHint}>Key details your assistant has captured.</Text>
                 {facts.length === 0
-                    ? <Text style={styles.emptyText}>No facts captured yet.</Text>
+                    ? <Text style={styles.emptyText}>No facts captured yet. Mention concrete details in a thread to populate this list.</Text>
                     : facts.map(renderFact)}
             </View>
 
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Open Actions ({actions.length})</Text>
+                <Text style={styles.sectionHint}>Reminders and tasks that are still open.</Text>
                 {actions.length === 0
                     ? <Text style={styles.emptyText}>No open reminders or tasks.</Text>
                     : actions.map(renderAction)}
@@ -348,7 +351,12 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
         color: Colors.text,
-        marginBottom: 8
+        marginBottom: 4
+    },
+    sectionHint: {
+        fontSize: 12,
+        color: Colors.secondaryText,
+        marginBottom: 6
     },
     emptyText: {
         color: Colors.secondaryText,

@@ -114,7 +114,7 @@ export default function DownloadScreen() {
 
                         <Text style={styles.infoText}>
                             This may take a few minutes depending on your connection.
-                            {'\n'}Keep this screen open and setup will finish automatically.
+                            {'\n'}Keep this screen open. Setup will continue automatically when complete.
                         </Text>
                     </>
                 )}
@@ -122,7 +122,7 @@ export default function DownloadScreen() {
                 {complete && (
                     <>
                         <Text style={styles.successText}>
-                            Model is installed and active. Opening your app…
+                            Model installed and activated. Opening your spaces…
                         </Text>
                     </>
                 )}
@@ -134,11 +134,11 @@ export default function DownloadScreen() {
                         </View>
 
                         <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-                            <Text style={styles.retryButtonText}>Retry Download</Text>
+                            <Text style={styles.retryButtonText}>Try Download Again</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
-                            <Text style={styles.skipButtonText}>Back to Model Selection</Text>
+                            <Text style={styles.skipButtonText}>Choose a Different Model</Text>
                         </TouchableOpacity>
                     </>
                 )}

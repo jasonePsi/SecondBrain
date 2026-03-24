@@ -1,4 +1,5 @@
 import { MessageRepo } from '../repositories/message_repo';
+import type { Message } from '../repositories/message_repo';
 import { rankOlderCandidates, scoreMessage, tokenize } from './retrieval_utils';
 
 const DEFAULT_RECENT_OFFSET = 12;

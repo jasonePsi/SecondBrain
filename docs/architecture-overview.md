@@ -19,9 +19,11 @@ Initialization order:
    - route to app if proxy is available
    - route to settings if proxy is unavailable
 4. If local provider path is active:
-   - route to app when an active local model exists
+   - route to app when local provider status is available
    - route to onboarding when no models are installed
-   - route to settings when models exist but none is active
+   - route to settings when models exist but local is unavailable/misconfigured
+
+Routing decisions are kept deterministic in `src/services/provider_bootstrap_utils.ts`.
 
 SQLite client setup happens in `src/db/client.ts`.
 
@@ -69,6 +71,8 @@ Implementations:
 Cloud health checks are traceable end-to-end via request IDs (`x-request-id` / `requestId`) and expose explicit status fields (`ok`, `configured`, `code`, `reason`).
 For chat/extraction endpoints, request IDs can be supplied in either header or body; header IDs remain canonical when both are present.
 Settings surfaces provider detail codes and request traces when cloud availability checks fail.
+`LLMService` normalizes provider status-check failures into deterministic unavailable states (`CLOUD_PROVIDER_STATUS_CHECK_FAILED` / `LOCAL_PROVIDER_STATUS_CHECK_FAILED`) so startup/settings handling stays coherent even when checks throw.
+Runtime provider release is deferred while requests are in flight; provider switches are explicit and apply to subsequent turns.
 
 Cloud provider error handling normalizes proxy failures into stable, user-safe messages.
 
@@ -89,6 +93,7 @@ Local model lifecycle is handled by `ModelManager` + `ModelRepo`:
 3. Activate explicitly (`ModelRepo.activateModel`).
 4. Runtime provider init loads active model from disk.
 5. Deleting an active model selects a fallback installed model or clears active state.
+   - fallback selection ignores invalid/stale entries to keep active-model state deterministic.
 
 Settings keeps install and activate actions separate.
 

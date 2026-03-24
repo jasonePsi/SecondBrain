@@ -28,3 +28,24 @@ test('resolveFallbackActiveModelId returns null when remaining list is empty or 
   assert.equal(resolveFallbackActiveModelId(true, [{ model_id: '' }]), null);
   assert.equal(resolveFallbackActiveModelId(true, [{ model_id: '   ' }]), null);
 });
+
+test('resolveFallbackActiveModelId skips invalid entries and keeps deterministic first valid fallback', () => {
+  const fallback = resolveFallbackActiveModelId(true, [
+    { model_id: '   ' },
+    { model_id: '' },
+    { model_id: 'm4' },
+    { model_id: 'm5' }
+  ]);
+  assert.equal(fallback, 'm4');
+});
+
+test('resolveFallbackActiveModelId ignores malformed candidate objects safely', () => {
+  const fallback = resolveFallbackActiveModelId(true, [
+    null,
+    {},
+    { model_id: 42 },
+    { model_id: '   ' },
+    { model_id: 'm6' }
+  ]);
+  assert.equal(fallback, 'm6');
+});

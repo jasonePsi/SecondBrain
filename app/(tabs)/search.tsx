@@ -69,6 +69,9 @@ export default function SearchScreen() {
     const [error, setError] = useState<string | null>(null);
     const [searchNonce, setSearchNonce] = useState(0);
     const searchTokenRef = useRef(0);
+    const cancelInFlightSearch = () => {
+        searchTokenRef.current += 1;
+    };
 
     useEffect(() => {
         const timeout = setTimeout(() => {
@@ -81,21 +84,19 @@ export default function SearchScreen() {
     useEffect(() => {
         const runSearch = async () => {
             if (!debouncedQuery) {
+                cancelInFlightSearch();
                 setSpaces([]);
                 setThreads([]);
                 setMessages([]);
                 setMessageThreadTitles({});
                 setError(null);
+                setIsSearching(false);
                 return;
             }
 
             const searchToken = ++searchTokenRef.current;
             setIsSearching(true);
             setError(null);
-            setSpaces([]);
-            setThreads([]);
-            setMessages([]);
-            setMessageThreadTitles({});
             try {
                 const [spaceRows, threadRows, messageRows] = await Promise.all([
                     SpaceRepo.search(debouncedQuery),
@@ -163,7 +164,7 @@ export default function SearchScreen() {
                     type: 'message',
                     id: message.id,
                     title: toMessageTitle(message),
-                    subtitle: `${message.role === 'assistant' ? 'Assistant' : 'You'} • ${messageThreadTitles[message.thread_id] || 'Thread'} • ${formatResultTimestamp(message.created_at)}`,
+                    subtitle: `${message.role === 'assistant' ? 'Assistant' : 'You'} in ${messageThreadTitles[message.thread_id] || 'Thread'} • ${formatResultTimestamp(message.created_at)}`,
                     snippet: message.snippet,
                     navigateTo: `/thread/${message.thread_id}?messageId=${encodeURIComponent(message.id)}`
                 }))
@@ -182,9 +183,11 @@ export default function SearchScreen() {
     };
 
     const clearQuery = () => {
+        cancelInFlightSearch();
         setQuery('');
         setDebouncedQuery('');
         setError(null);
+        setIsSearching(false);
     };
 
     const retrySearch = () => {

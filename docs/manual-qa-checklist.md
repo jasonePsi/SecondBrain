@@ -16,7 +16,7 @@
    - model downloads, activates, and app opens to Spaces.
 3. Settings:
    - install does not auto-switch active model.
-   - explicit "Use This Model" changes active model.
+   - explicit "Use This Model" changes active model (or "Set as Fallback" when cloud is active).
 4. Delete active model:
    - fallback model becomes active if present, else active model is cleared.
 
@@ -49,11 +49,13 @@
 3. Long threads:
    - "Load Older Messages" appears.
    - full history can be loaded without silent truncation.
+   - while older messages load, status text is visible (not spinner-only).
 4. Provider/model unavailable:
    - banner copy is actionable.
    - sending is blocked when provider is clearly unavailable.
    - retry path is visible from the banner.
    - send alert includes an “Open Settings” action.
+   - while retrying AI, composer/mic actions stay disabled and show reconnecting state.
 
 ## Memory + Feed
 
@@ -89,6 +91,7 @@
 5. Open a message hit and confirm thread scrolls/highlights relevant message context.
 6. Try a no-results query and verify friendly empty state with a “Clear search” action.
 7. Confirm message hits show role/thread/time context.
+8. Clear query while search is in-flight and confirm stale results do not reappear.
 
 ## States and Polish
 
@@ -104,3 +107,4 @@
    - model status and battery impact copy are clear.
 4. For Brain/Feed/Spaces/Space detail partial refresh failures, verify inline warning rows include an explicit “Retry” action.
 5. In thread view, verify conversation history load failures still show a visible retry row even when no messages have loaded yet.
+6. Feed empty state offers a direct path to Spaces ("Go to Spaces").

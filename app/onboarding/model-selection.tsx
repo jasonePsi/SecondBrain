@@ -52,7 +52,7 @@ export default function ModelSelectionScreen() {
             }
         } catch (error) {
             console.error('Error loading model data:', error);
-            setLoadError('Could not load model options. Please try again.');
+            setLoadError('Model list is temporarily unavailable. Please retry.');
         } finally {
             setLoading(false);
         }
@@ -109,9 +109,9 @@ export default function ModelSelectionScreen() {
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-            <Text style={styles.title}>Choose a Local Model</Text>
+            <Text style={styles.title}>Choose Your Local Model</Text>
             <Text style={styles.subtitle}>
-                Pick one local model for offline chat. You can install or switch models later in Settings.
+                Pick one local model to finish setup. You can install or switch models later in Settings.
             </Text>
 
             <View style={styles.storageInfo}>
@@ -228,13 +228,13 @@ export default function ModelSelectionScreen() {
                     {submitting
                         ? 'Please wait…'
                         : selectedModel && installedModelIds.has(selectedModel)
-                        ? 'Use Selected Model'
+                        ? 'Continue with Selected Model'
                         : 'Download & Continue'}
                 </Text>
             </TouchableOpacity>
             <Text style={styles.continueHint}>
                 {selectedModel && installedModelIds.has(selectedModel)
-                    ? 'This will switch your active local model.'
+                    ? 'This will set your active local model.'
                     : 'Next step installs and activates this model before opening the app.'}
             </Text>
         </ScrollView>

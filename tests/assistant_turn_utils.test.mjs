@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getAssistantFallbackReplyForStage,
   getUserFacingTurnErrorForStage,
+  isCloudAssistantReplyFailureStage,
   isExpectedTurnStageTransition,
   isTerminalTurnStage,
   logTurnStageTransition,
@@ -12,6 +13,30 @@ import {
   shouldResetProviderReadinessForStage,
   TURN_STAGES
 } from '../src/services/assistant_turn_utils.ts';
+
+const withMutedConsole = (fn) => {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = () => {};
+  console.warn = () => {};
+
+  try {
+    const value = fn();
+    if (value && typeof value.then === 'function') {
+      return value.finally(() => {
+        console.log = originalLog;
+        console.warn = originalWarn;
+      });
+    }
+    console.log = originalLog;
+    console.warn = originalWarn;
+    return value;
+  } catch (error) {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    throw error;
+  }
+};
 
 test('provider-stage failures map to provider reset + provider error message', () => {
   assert.equal(
@@ -40,7 +65,7 @@ test('memory-context-stage failure maps to context-specific user message', () =>
 });
 
 test('logTurnStageTransition returns next stage for deterministic state updates', () => {
-  const next = logTurnStageTransition(
+  const next = withMutedConsole(() => logTurnStageTransition(
     TURN_STAGES.START,
     TURN_STAGES.PERSIST_USER_MESSAGE,
     {
@@ -48,7 +73,7 @@ test('logTurnStageTransition returns next stage for deterministic state updates'
       threadId: 'thread-1',
       provider: 'local'
     }
-  );
+  ));
   assert.equal(next, TURN_STAGES.PERSIST_USER_MESSAGE);
 });
 
@@ -96,6 +121,14 @@ test('isExpectedTurnStageTransition allows forward transitions and terminal fail
     true
   );
   assert.equal(
+    isExpectedTurnStageTransition(TURN_STAGES.START, TURN_STAGES.INIT_PROVIDER),
+    false
+  );
+  assert.equal(
+    isExpectedTurnStageTransition(TURN_STAGES.PERSIST_ASSISTANT_REPLY, TURN_STAGES.QUEUE_POST_PROCESSING),
+    true
+  );
+  assert.equal(
     isExpectedTurnStageTransition(TURN_STAGES.GENERATE_ASSISTANT_REPLY, TURN_STAGES.FAILED),
     true
   );
@@ -109,6 +142,19 @@ test('isExpectedTurnStageTransition allows forward transitions and terminal fail
   );
 });
 
+test('logTurnStageTransition keeps previous stage when transition is unexpected', () => {
+  const next = withMutedConsole(() => logTurnStageTransition(
+    TURN_STAGES.START,
+    TURN_STAGES.INIT_PROVIDER,
+    {
+      turnId: 'turn-unexpected',
+      threadId: 'thread-unexpected',
+      provider: 'cloud'
+    }
+  ));
+  assert.equal(next, TURN_STAGES.START);
+});
+
 test('stage-specific assistant fallback text is explicit for provider/context failures', () => {
   assert.equal(
     getAssistantFallbackReplyForStage(TURN_STAGES.INIT_PROVIDER),
@@ -120,13 +166,28 @@ test('stage-specific assistant fallback text is explicit for provider/context fa
   );
 });
 
+test('isCloudAssistantReplyFailureStage identifies cloud generation-stage failures only', () => {
+  assert.equal(
+    isCloudAssistantReplyFailureStage('cloud', TURN_STAGES.GENERATE_ASSISTANT_REPLY),
+    true
+  );
+  assert.equal(
+    isCloudAssistantReplyFailureStage('local', TURN_STAGES.GENERATE_ASSISTANT_REPLY),
+    false
+  );
+  assert.equal(
+    isCloudAssistantReplyFailureStage('cloud', TURN_STAGES.BUILD_MEMORY_CONTEXT),
+    false
+  );
+});
+
 test('logTurnPostProcessingStage is callable for stable stage instrumentation', () => {
-  assert.doesNotThrow(() => {
+  assert.doesNotThrow(() => withMutedConsole(() => {
     logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.QUEUED, {
       turnId: 'turn-1',
       threadId: 'thread-1',
       provider: 'cloud',
       detail: 'queued after assistant reply'
     });
-  });
+  }));
 });

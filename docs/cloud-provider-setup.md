@@ -47,9 +47,11 @@ Open **Settings -> AI Provider** and select:
 
 If the backend is unavailable or not configured, cloud selection is disabled with a reason.
 Cloud switch attempts re-check live health and show actionable detail codes/traces when unavailable.
+If a provider switch happens while a turn is still in flight, the current reply finishes first and the switch applies to the next turn.
 
 If cloud is selected but unavailable during startup, the app routes to Settings and surfaces the provider reason there.
 Provider health mapping is deterministic and includes stable detail codes (for example `CLOUD_PROXY_URL_MISSING`, `CLOUD_PROXY_HEALTH_HTTP_ERROR`, `CLOUD_PROXY_INVALID_HEALTH_RESPONSE`, `CLOUD_PROXY_UNREACHABLE`).
+Local provider lifecycle/status also exposes explicit detail codes (`LOCAL_MODEL_NOT_SELECTED`, `LOCAL_MODEL_FILE_MISSING`, `LOCAL_MODEL_READY`) so startup/settings/thread errors stay actionable.
 
 ## Privacy defaults
 

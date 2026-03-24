@@ -64,6 +64,13 @@ test('parseStructuredExtractionRaw returns parse diagnostics for malformed JSON'
   assert.ok(parsed.diagnostics.droppedReasons.includes('json_parse_failed'));
 });
 
+test('parseStructuredExtractionRaw keeps deterministic diagnostics when ops payload is not an array', () => {
+  const parsed = parseStructuredExtractionRaw('{"ops":{"op":"UPSERT_FACT"}}');
+  assert.equal(parsed.parseError, undefined);
+  assert.equal(parsed.ops.length, 0);
+  assert.deepEqual(parsed.diagnostics.droppedReasons, ['ops_not_array']);
+});
+
 test('validateOps reports ops_not_array when ops payload is not an array', () => {
   const result = validateOps({ op: 'UPSERT_FACT' });
   assert.equal(result.ops.length, 0);

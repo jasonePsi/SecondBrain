@@ -62,10 +62,23 @@ const formatActionLine = (action: Action): string => {
     return `[${action.type}] ${clipText(text, 80)} @ ${when}`;
 };
 
+const sortFactsForContext = (facts: Fact[]): Fact[] => {
+    return [...facts].sort((left, right) => {
+        if (right.effective_at !== left.effective_at) {
+            return right.effective_at - left.effective_at;
+        }
+        if (right.created_at !== left.created_at) {
+            return right.created_at - left.created_at;
+        }
+        return left.id.localeCompare(right.id);
+    });
+};
+
 const dedupeLatestFactsByKey = (facts: Fact[], maxItems: number): Fact[] => {
     const selected: Fact[] = [];
     const seen = new Set<string>();
-    for (const fact of facts) {
+    const ordered = sortFactsForContext(facts);
+    for (const fact of ordered) {
         const dedupeKey = `${fact.entity_id || ''}::${fact.key}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);

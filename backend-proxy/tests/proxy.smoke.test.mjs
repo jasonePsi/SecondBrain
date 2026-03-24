@@ -5,6 +5,19 @@ import serverModule from '../src/server.js';
 const { createServerApp, resolveConfig, validateConfig } = serverModule;
 const { resolvePrivacy, selectModel, isRetryableStatus } = serverModule.__proxyTestUtils;
 
+const originalConsoleLog = console.log;
+const originalConsoleWarn = console.warn;
+
+test.before(() => {
+  console.log = () => {};
+  console.warn = () => {};
+});
+
+test.after(() => {
+  console.log = originalConsoleLog;
+  console.warn = originalConsoleWarn;
+});
+
 const startServer = async (options = {}) => {
   const { app } = createServerApp(options);
   const server = await new Promise((resolve) => {

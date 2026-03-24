@@ -49,11 +49,11 @@ export default function NewSpaceScreen() {
                 {!!error && <Text style={styles.errorText}>{error}</Text>}
 
                 <TouchableOpacity
-                    style={[styles.button, !name.trim() && styles.buttonDisabled]}
+                    style={[styles.button, (!name.trim() || isSubmitting) && styles.buttonDisabled]}
                     onPress={handleCreate}
                     disabled={!name.trim() || isSubmitting}
                 >
-                    <Text style={styles.buttonText}>{isSubmitting ? 'Creating…' : 'Create Space'}</Text>
+                    <Text style={styles.buttonText}>{isSubmitting ? 'Creating space…' : 'Create Space'}</Text>
                 </TouchableOpacity>
             </View>
         </KeyboardAvoidingView>

@@ -136,11 +136,67 @@ const formatProviderStatusError = (
     return `${codePrefix}${reason}${traceSuffix}`;
 };
 
+const toStatusCheckFailureStatus = (
+    provider: AIProviderType,
+    error: unknown
+): AIProviderStatus => {
+    const message = normalizeError(
+        error,
+        'Provider status check failed'
+    ).message;
+    const detailCode = provider === 'cloud'
+        ? 'CLOUD_PROVIDER_STATUS_CHECK_FAILED'
+        : 'LOCAL_PROVIDER_STATUS_CHECK_FAILED';
+    return {
+        provider,
+        label: getProviderImplByType(provider).label,
+        available: false,
+        configured: false,
+        reason: message,
+        detailCode,
+        lastCheckedAt: Date.now()
+    };
+};
+
+const getProviderStatusSafe = async (provider: AIProviderType): Promise<AIProviderStatus> => {
+    try {
+        return await getProviderImplByType(provider).getStatus();
+    } catch (error) {
+        const fallbackStatus = toStatusCheckFailureStatus(provider, error);
+        console.warn('[LLMService] provider status check failed', {
+            provider,
+            detailCode: fallbackStatus.detailCode,
+            reason: fallbackStatus.reason
+        });
+        return fallbackStatus;
+    }
+};
+
 export const LLMService = {
     init: async (preferredProvider?: AIProviderType): Promise<void> => {
         const providerType = await resolveProviderType(preferredProvider);
+        const status = await getProviderStatusSafe(providerType);
+        if (!status.available) {
+            throw new Error(
+                formatProviderStatusError(
+                    status,
+                    providerType === 'cloud'
+                        ? 'Cloud provider is unavailable'
+                        : 'Local provider is unavailable'
+                )
+            );
+        }
         const provider = getProviderImplByType(providerType);
-        await provider.init();
+        try {
+            await provider.init();
+        } catch (error) {
+            throw normalizeError(
+                error,
+                providerType === 'cloud'
+                    ? 'Failed to initialize cloud provider'
+                    : 'Failed to initialize local provider'
+            );
+        }
     },
 
     release: async (): Promise<void> => {
@@ -229,9 +285,8 @@ export const LLMService = {
     },
 
     setActiveProvider: async (provider: AIProviderType): Promise<void> => {
-        const targetProvider = getProviderImplByType(provider);
         if (provider === 'cloud') {
-            const status = await targetProvider.getStatus();
+            const status = await getProviderStatusSafe('cloud');
             if (!status.available) {
                 throw new Error(
                     formatProviderStatusError(status, 'Cloud provider is unavailable')
@@ -244,14 +299,26 @@ export const LLMService = {
     },
 
     getProviderStatus: async (provider: AIProviderType): Promise<AIProviderStatus> => {
-        return await getProviderImplByType(provider).getStatus();
+        return await getProviderStatusSafe(provider);
     },
 
     listProviderStatuses: async (): Promise<AIProviderStatus[]> => {
         return await Promise.all([
-            localProvider.getStatus(),
-            cloudProvider.getStatus()
+            getProviderStatusSafe('local'),
+            getProviderStatusSafe('cloud')
         ]);
+    },
+
+    getRuntimeState: (): {
+        inFlightRequests: number;
+        deferredReleaseRequested: boolean;
+        releaseInProgress: boolean;
+    } => {
+        return {
+            inFlightRequests,
+            deferredReleaseRequested,
+            releaseInProgress: releaseInProgress !== null
+        };
     }
 };
 

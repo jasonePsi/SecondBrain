@@ -213,11 +213,13 @@ export class OpenAIProxyProvider implements AIProvider {
                     isAbort,
                     willRetry: shouldRetry
                 });
-                lastError = new Error(
-                    isAbort
-                        ? `Cloud request timed out after ${timeoutMs}ms`
-                        : trimErrorMessage(error?.message || 'Cloud request failed')
-                );
+                const baseMessage = isAbort
+                    ? `Cloud request timed out after ${timeoutMs}ms`
+                    : trimErrorMessage(error?.message || 'Cloud request failed');
+                const requestTaggedMessage = /\(request [^)]+\)\s*$/i.test(baseMessage)
+                    ? baseMessage
+                    : `${baseMessage} (request ${requestId})`;
+                lastError = new Error(trimErrorMessage(requestTaggedMessage, 220));
 
                 if (!shouldRetry) break;
                 await delay(300 * (attempt + 1));
@@ -256,6 +258,11 @@ export class OpenAIProxyProvider implements AIProvider {
             const responseTraceIdFromHeader = response.headers.get('x-request-id')?.trim() || healthRequestId;
 
             if (!response.ok) {
+                console.warn('[OpenAIProxyProvider] health check non-2xx response', {
+                    requestId: healthRequestId,
+                    proxyRequestId: responseTraceIdFromHeader,
+                    status: response.status
+                });
                 return healthHttpErrorStatus(
                     {
                         ...statusSeed,
@@ -269,6 +276,11 @@ export class OpenAIProxyProvider implements AIProvider {
             try {
                 payload = (await response.json()) as ProxyHealthResponse;
             } catch (error: any) {
+                console.warn('[OpenAIProxyProvider] health check invalid JSON response', {
+                    requestId: healthRequestId,
+                    proxyRequestId: responseTraceIdFromHeader,
+                    message: error?.message
+                });
                 return invalidHealthResponseStatus(
                     {
                         ...statusSeed,
@@ -286,6 +298,10 @@ export class OpenAIProxyProvider implements AIProvider {
                 payload
             );
         } catch (error: any) {
+            console.warn('[OpenAIProxyProvider] health check request failed', {
+                requestId: healthRequestId,
+                message: error?.message
+            });
             return unreachableProxyStatus(
                 {
                     ...statusSeed,

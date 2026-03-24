@@ -34,7 +34,7 @@ export default function SpaceDetailScreen() {
       setThreads(data);
     } catch (err: any) {
       console.error('Failed to load space detail:', err);
-      setError('Could not load threads right now.');
+      setError('We could not load threads in this space.');
     } finally {
       setLoading(false);
     }
@@ -156,7 +156,7 @@ export default function SpaceDetailScreen() {
       <View style={styles.container}>
         <Stack.Screen options={{ title: spaceName }} />
         <View style={styles.fullState}>
-          <Text style={styles.errorStateText}>Could not load threads right now.</Text>
+          <Text style={styles.errorStateText}>We could not load threads in this space.</Text>
           <Text style={styles.errorStateSubtext}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadData}>
             <Text style={styles.retryButtonText}>Retry</Text>
@@ -192,6 +192,7 @@ export default function SpaceDetailScreen() {
       <FlashList
         data={threads}
         renderItem={renderItem}
+        keyExtractor={(item) => item.id}
         ListEmptyComponent={(
           loading ? (
             <View style={styles.centerState}>
@@ -200,7 +201,7 @@ export default function SpaceDetailScreen() {
             </View>
           ) : (
             <View style={styles.centerState}>
-              <Text style={styles.empty}>No threads yet. Create your first thread.</Text>
+              <Text style={styles.empty}>No threads yet. Create your first thread to start chatting.</Text>
               <TouchableOpacity style={styles.emptyActionButton} onPress={openNewThread}>
                 <Text style={styles.emptyActionText}>Create Thread</Text>
               </TouchableOpacity>
@@ -211,7 +212,7 @@ export default function SpaceDetailScreen() {
           <View>
             {!!error && (
               <View style={styles.inlineWarningRow}>
-                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                <Text style={styles.inlineError}>Refresh issue: {error}</Text>
                 <TouchableOpacity onPress={loadData}>
                   <Text style={styles.inlineWarningAction}>Retry</Text>
                 </TouchableOpacity>

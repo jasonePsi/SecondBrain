@@ -34,22 +34,38 @@ interface TurnPostProcessingStageContext {
     detail?: string;
 }
 
-const TURN_STAGE_SEQUENCE: TurnStage[] = [
-    TURN_STAGES.START,
-    TURN_STAGES.STOP_RECORDING,
-    TURN_STAGES.PERSIST_USER_MESSAGE,
-    TURN_STAGES.RESOLVE_PROVIDER,
-    TURN_STAGES.INIT_PROVIDER,
-    TURN_STAGES.BUILD_MEMORY_CONTEXT,
-    TURN_STAGES.GENERATE_ASSISTANT_REPLY,
-    TURN_STAGES.PERSIST_ASSISTANT_REPLY,
-    TURN_STAGES.QUEUE_POST_PROCESSING,
-    TURN_STAGES.COMPLETED
-];
-
-const TURN_STAGE_INDEX = new Map(
-    TURN_STAGE_SEQUENCE.map((stage, index) => [stage, index] as const)
-);
+const TURN_ALLOWED_TRANSITIONS: Record<TurnStage, ReadonlyArray<TurnStage>> = {
+    [TURN_STAGES.START]: [
+        TURN_STAGES.STOP_RECORDING,
+        TURN_STAGES.PERSIST_USER_MESSAGE
+    ],
+    [TURN_STAGES.STOP_RECORDING]: [
+        TURN_STAGES.PERSIST_USER_MESSAGE
+    ],
+    [TURN_STAGES.PERSIST_USER_MESSAGE]: [
+        TURN_STAGES.RESOLVE_PROVIDER
+    ],
+    [TURN_STAGES.RESOLVE_PROVIDER]: [
+        TURN_STAGES.INIT_PROVIDER
+    ],
+    [TURN_STAGES.INIT_PROVIDER]: [
+        TURN_STAGES.BUILD_MEMORY_CONTEXT
+    ],
+    [TURN_STAGES.BUILD_MEMORY_CONTEXT]: [
+        TURN_STAGES.GENERATE_ASSISTANT_REPLY
+    ],
+    [TURN_STAGES.GENERATE_ASSISTANT_REPLY]: [
+        TURN_STAGES.PERSIST_ASSISTANT_REPLY
+    ],
+    [TURN_STAGES.PERSIST_ASSISTANT_REPLY]: [
+        TURN_STAGES.QUEUE_POST_PROCESSING
+    ],
+    [TURN_STAGES.QUEUE_POST_PROCESSING]: [
+        TURN_STAGES.COMPLETED
+    ],
+    [TURN_STAGES.COMPLETED]: [],
+    [TURN_STAGES.FAILED]: []
+};
 
 const PROVIDER_FAILURE_STAGES = new Set<string>([
     TURN_STAGES.RESOLVE_PROVIDER,
@@ -78,13 +94,11 @@ export const isExpectedTurnStageTransition = (
     to: TurnStage
 ): boolean => {
     if (from === to) return true;
-    if (to === TURN_STAGES.FAILED) return !isTerminalTurnStage(from);
     if (isTerminalTurnStage(from)) return false;
+    if (to === TURN_STAGES.FAILED) return true;
 
-    const fromIndex = TURN_STAGE_INDEX.get(from);
-    const toIndex = TURN_STAGE_INDEX.get(to);
-    if (fromIndex === undefined || toIndex === undefined) return false;
-    return toIndex >= fromIndex;
+    const allowedTransitions = TURN_ALLOWED_TRANSITIONS[from] || [];
+    return allowedTransitions.includes(to);
 };
 
 export const shouldResetProviderReadinessForStage = (
@@ -92,6 +106,13 @@ export const shouldResetProviderReadinessForStage = (
 ): boolean => {
     if (!stage) return false;
     return PROVIDER_FAILURE_STAGES.has(stage);
+};
+
+export const isCloudAssistantReplyFailureStage = (
+    provider: AIProviderType | undefined,
+    stage: TurnStage | string | undefined
+): boolean => {
+    return provider === 'cloud' && stage === TURN_STAGES.GENERATE_ASSISTANT_REPLY;
 };
 
 export const getUserFacingTurnErrorForStage = (
@@ -132,8 +153,10 @@ export const logTurnStageTransition = (
             provider: context.provider,
             from,
             to,
-            detail: sanitizeStageDetail(context.detail)
+            detail: sanitizeStageDetail(context.detail),
+            expectedNextStages: TURN_ALLOWED_TRANSITIONS[from]
         });
+        return from;
     }
     console.log('[ThreadTurn] stage', {
         turnId: context.turnId,

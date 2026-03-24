@@ -136,7 +136,24 @@ export const ModelManager = {
             let fallbackActiveModelId: string | null = null;
             if (deletedWasActive) {
                 const remainingModels = await ModelRepo.getInstalledModels();
-                fallbackActiveModelId = resolveFallbackActiveModelId(deletedWasActive, remainingModels);
+                const usableRemainingModels = [] as typeof remainingModels;
+                for (const candidate of remainingModels) {
+                    const installed = await ModelManager.isInstalled(candidate.model_id);
+                    if (installed) {
+                        usableRemainingModels.push(candidate);
+                        continue;
+                    }
+
+                    console.warn('[ModelManager] Removing stale model metadata during fallback selection', {
+                        modelId: candidate.model_id
+                    });
+                    await ModelRepo.deleteModel(candidate.model_id);
+                }
+
+                fallbackActiveModelId = resolveFallbackActiveModelId(
+                    deletedWasActive,
+                    usableRemainingModels
+                );
                 if (fallbackActiveModelId) {
                     await ModelRepo.activateModel(fallbackActiveModelId);
                 } else {

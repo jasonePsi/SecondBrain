@@ -4,8 +4,11 @@ import { useRouter } from "expo-router";
 import { runMigrations } from "../src/db/migrations";
 import { ModelManager } from "../src/services/ModelManager";
 import { LLMService } from "../src/services/LLMService";
-
-type InitialRoute = '/(tabs)/spaces' | '/(tabs)/settings' | '/onboarding/model-selection';
+import {
+    InitialRoute,
+    resolveCloudProviderInitialRoute,
+    resolveLocalProviderInitialRoute
+} from "../src/services/provider_bootstrap_utils";
 
 const resolveInitialRoute = async (): Promise<InitialRoute> => {
     const activeProvider = await LLMService.getActiveProvider();
@@ -19,7 +22,7 @@ const resolveInitialRoute = async (): Promise<InitialRoute> => {
                     requestId: cloudStatus.requestId
                 });
             }
-            return cloudStatus.available ? '/(tabs)/spaces' : '/(tabs)/settings';
+            return resolveCloudProviderInitialRoute(cloudStatus.available);
         } catch (error: any) {
             console.warn('[AppBootstrap] Cloud status check failed during startup', {
                 message: error?.message
@@ -28,14 +31,20 @@ const resolveInitialRoute = async (): Promise<InitialRoute> => {
         }
     }
 
-    const [installedModels, activeModel] = await Promise.all([
+    const [installedModels, localStatus] = await Promise.all([
         ModelManager.getInstalledModels(),
-        ModelManager.getActiveModel()
+        LLMService.getProviderStatus('local')
     ]);
 
-    if (activeModel) return '/(tabs)/spaces';
-    if (installedModels.length === 0) return '/onboarding/model-selection';
-    return '/(tabs)/settings';
+    if (localStatus.available) return '/(tabs)/spaces';
+    console.warn('[AppBootstrap] Local provider unavailable during startup', {
+        reason: localStatus.reason,
+        detailCode: localStatus.detailCode
+    });
+    return resolveLocalProviderInitialRoute({
+        localAvailable: localStatus.available,
+        installedModelCount: installedModels.length
+    });
 };
 
 export default function Index() {

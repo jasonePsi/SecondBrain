@@ -80,6 +80,7 @@ export class LocalLlamaProvider implements AIProvider {
     }
 
     async getStatus(): Promise<AIProviderStatus> {
+        const checkedAt = Date.now();
         const activeModel = await ModelManager.getActiveModel();
         if (!activeModel) {
             return {
@@ -87,7 +88,9 @@ export class LocalLlamaProvider implements AIProvider {
                 label: this.label,
                 available: false,
                 configured: false,
-                reason: 'No active local model selected'
+                reason: 'No active local model selected',
+                detailCode: 'LOCAL_MODEL_NOT_SELECTED',
+                lastCheckedAt: checkedAt
             };
         }
 
@@ -98,7 +101,9 @@ export class LocalLlamaProvider implements AIProvider {
                 label: this.label,
                 available: false,
                 configured: true,
-                reason: 'Active local model file not found'
+                reason: 'Active local model file not found',
+                detailCode: 'LOCAL_MODEL_FILE_MISSING',
+                lastCheckedAt: checkedAt
             };
         }
 
@@ -106,7 +111,9 @@ export class LocalLlamaProvider implements AIProvider {
             provider: this.provider,
             label: this.label,
             available: true,
-            configured: true
+            configured: true,
+            detailCode: 'LOCAL_MODEL_READY',
+            lastCheckedAt: checkedAt
         };
     }
 
