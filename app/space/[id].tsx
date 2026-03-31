@@ -157,7 +157,7 @@ export default function SpaceDetailScreen() {
         <Stack.Screen options={{ title: spaceName }} />
         <View style={styles.fullState}>
           <Text style={styles.errorStateText}>We could not load threads in this space.</Text>
-          <Text style={styles.errorStateSubtext}>{error}</Text>
+          <Text style={styles.errorStateSubtext}>Please try again. You can still return to Spaces.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadData}>
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
@@ -217,6 +217,9 @@ export default function SpaceDetailScreen() {
                   <Text style={styles.inlineWarningAction}>Retry</Text>
                 </TouchableOpacity>
               </View>
+            )}
+            {loading && threads.length > 0 && (
+              <Text style={styles.inlineHint}>Refreshing threads…</Text>
             )}
             {isEditing && (
               <Text style={styles.inlineHint}>Editing enabled: rename or delete threads. Tap ✓ when done.</Text>

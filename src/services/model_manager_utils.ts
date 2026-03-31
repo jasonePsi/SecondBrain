@@ -2,6 +2,11 @@ export interface InstalledModelLike {
     model_id: string;
 }
 
+const LOCAL_FALLBACK_ELIGIBLE_DETAIL_CODES = new Set([
+    'LOCAL_MODEL_FILE_MISSING',
+    'LOCAL_MODEL_NOT_SELECTED'
+]);
+
 export const resolveFallbackActiveModelId = (
     deletedWasActive: boolean,
     remainingModels: InstalledModelLike[]
@@ -21,4 +26,15 @@ export const resolveFallbackActiveModelId = (
     }
 
     return null;
+};
+
+export const shouldAttemptLocalFallbackActivation = (input: {
+    localProviderAvailable: boolean;
+    localStatusDetailCode?: string;
+    usableInstalledModelCount: number;
+}): boolean => {
+    if (input.localProviderAvailable) return false;
+    if (!Number.isFinite(input.usableInstalledModelCount)) return false;
+    if (Math.floor(input.usableInstalledModelCount) <= 0) return false;
+    return LOCAL_FALLBACK_ELIGIBLE_DETAIL_CODES.has(input.localStatusDetailCode || '');
 };

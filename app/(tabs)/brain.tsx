@@ -37,7 +37,7 @@ export default function BrainScreen() {
             setSnapshot(next);
         } catch (err: any) {
             console.error('Brain refresh failed:', err);
-            setError('Could not refresh memory right now.');
+            setError('Memory is temporarily unavailable. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -69,7 +69,7 @@ export default function BrainScreen() {
             <Text style={styles.cardMeta}>Captured {formatTimestamp(entity.createdAt)}</Text>
             {!!entity.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open related context</Text>
+                    <Text style={styles.routeHintText}>Open context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -92,7 +92,7 @@ export default function BrainScreen() {
             <Text style={styles.cardMeta}>Updated {formatTimestamp(fact.effectiveAt)}</Text>
             {!!fact.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open related context</Text>
+                    <Text style={styles.routeHintText}>Open context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -123,7 +123,7 @@ export default function BrainScreen() {
             </Text>
             {!!action.route && (
                 <View style={styles.routeHintRow}>
-                    <Text style={styles.routeHintText}>Open related context</Text>
+                    <Text style={styles.routeHintText}>Open context</Text>
                     <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
                 </View>
             )}
@@ -179,7 +179,7 @@ export default function BrainScreen() {
             )}
             {!!error && (
                 <View style={styles.inlineWarningRow}>
-                    <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                    <Text style={styles.inlineError}>Refresh issue: {error}</Text>
                     <TouchableOpacity onPress={loadSnapshot}>
                         <Text style={styles.inlineWarningAction}>Retry</Text>
                     </TouchableOpacity>
@@ -220,7 +220,7 @@ export default function BrainScreen() {
                 <Text style={styles.sectionTitle}>Open Actions ({actions.length})</Text>
                 <Text style={styles.sectionHint}>Reminders and tasks that are still open.</Text>
                 {actions.length === 0
-                    ? <Text style={styles.emptyText}>No open reminders or tasks.</Text>
+                    ? <Text style={styles.emptyText}>No open reminders or tasks yet.</Text>
                     : actions.map(renderAction)}
             </View>
         </ScrollView>

@@ -46,6 +46,15 @@ npm run verify:all
 - syntax check (`node --check src/server.js`)
 - lightweight smoke tests (`tests/proxy.smoke.test.mjs`)
 
+Dependency/security checks:
+
+```bash
+npm audit
+npm audit --omit=dev
+```
+
+The proxy uses a targeted override for `path-to-regexp` to keep Express 4.x compatible while removing a known transitive advisory.
+
 ## Required environment variables
 
 - `OPENAI_API_KEY` (required for cloud calls)
@@ -56,10 +65,15 @@ npm run verify:all
 - `OPENAI_PROXY_REQUEST_TIMEOUT_MS` (default: `25000`)
 - `OPENAI_PROXY_DEFAULT_PRIVACY_MODE` (default: `minimal`; allowed: `minimal`, `standard`, `debug`)
 - `OPENAI_PROXY_DEFAULT_STORE` (default: `false`)
+- `OPENAI_PROXY_DEBUG_LOGS` (optional, default: `false`; set to `true` to emit request/success diagnostics)
 
 ## Startup validation
 
 The proxy validates configuration at startup and fails fast for invalid values (for example invalid port or timeout range). Missing `OPENAI_API_KEY` is reported as a startup warning and `/health` exposes `configured: false` until the key is set.
+
+By default, the proxy logs warnings/errors and startup info, while high-volume request/success diagnostics stay off.
+Transient upstream retry attempts are logged at debug level only, so normal validation output stays focused on actionable failures.
+Set `OPENAI_PROXY_DEBUG_LOGS=true` for development tracing.
 
 ## Error Response Shape
 

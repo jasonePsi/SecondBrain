@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveFallbackActiveModelId } from '../src/services/model_manager_utils.ts';
+import {
+  resolveFallbackActiveModelId,
+  shouldAttemptLocalFallbackActivation
+} from '../src/services/model_manager_utils.ts';
 
 test('resolveFallbackActiveModelId returns null when deleted model was not active', () => {
   const fallback = resolveFallbackActiveModelId(false, [{ model_id: 'm1' }]);
@@ -48,4 +51,53 @@ test('resolveFallbackActiveModelId ignores malformed candidate objects safely', 
     { model_id: 'm6' }
   ]);
   assert.equal(fallback, 'm6');
+});
+
+test('shouldAttemptLocalFallbackActivation allows fallback when local file is missing and usable models exist', () => {
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: false,
+      localStatusDetailCode: 'LOCAL_MODEL_FILE_MISSING',
+      usableInstalledModelCount: 2
+    }),
+    true
+  );
+});
+
+test('shouldAttemptLocalFallbackActivation allows fallback when no active model is selected but usable models exist', () => {
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: false,
+      localStatusDetailCode: 'LOCAL_MODEL_NOT_SELECTED',
+      usableInstalledModelCount: 1
+    }),
+    true
+  );
+});
+
+test('shouldAttemptLocalFallbackActivation blocks fallback for healthy provider, no models, or non-eligible detail code', () => {
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: true,
+      localStatusDetailCode: 'LOCAL_MODEL_FILE_MISSING',
+      usableInstalledModelCount: 2
+    }),
+    false
+  );
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: false,
+      localStatusDetailCode: 'LOCAL_PROVIDER_STATUS_CHECK_FAILED',
+      usableInstalledModelCount: 2
+    }),
+    false
+  );
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: false,
+      localStatusDetailCode: 'LOCAL_MODEL_NOT_SELECTED',
+      usableInstalledModelCount: 0
+    }),
+    false
+  );
 });

@@ -1,5 +1,6 @@
 import { AIConfig } from '../../constants/AIConfig.ts';
 import { sanitizeAssistantResponse } from '../ai/sanitize.ts';
+import { debugLog } from '../runtime_log.ts';
 import {
     isNonRetryableProxyErrorCode,
     parseProxyErrorPayload,
@@ -70,6 +71,16 @@ const readResponseTraceId = <T extends { requestId?: string }>(
     return bodyRequestId || headerRequestId;
 };
 
+const toSafeErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) {
+        return trimErrorMessage(error.message || 'Request failed');
+    }
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return trimErrorMessage(error);
+    }
+    return 'Request failed';
+};
+
 export class OpenAIProxyProvider implements AIProvider {
     readonly provider = 'cloud' as const;
     readonly label = 'OpenAI (Cloud via Proxy)';
@@ -117,7 +128,7 @@ export class OpenAIProxyProvider implements AIProvider {
             privacy: AIConfig.defaultPrivacy
         };
 
-        console.log('[OpenAIProxyProvider] request', {
+        debugLog('[OpenAIProxyProvider] request', {
             path,
             requestId,
             timeoutMs,
@@ -152,16 +163,16 @@ export class OpenAIProxyProvider implements AIProvider {
                         && !nonRetryableCode
                         && attempt < retries
                     );
-                    console.warn('[OpenAIProxyProvider] non-2xx response', {
-                        path,
-                        requestId,
-                        proxyRequestId: responseTraceId,
-                        status: response.status,
-                        errorCode: parsedError?.code,
-                        attempt,
-                        willRetry: shouldRetry
-                    });
                     if (shouldRetry) {
+                        debugLog('[OpenAIProxyProvider] transient non-2xx response, retrying', {
+                            path,
+                            requestId,
+                            proxyRequestId: responseTraceId,
+                            status: response.status,
+                            errorCode: parsedError?.code,
+                            attempt,
+                            retries
+                        });
                         await delay(300 * (attempt + 1));
                         continue;
                     }
@@ -169,6 +180,9 @@ export class OpenAIProxyProvider implements AIProvider {
                         toProxyErrorMessage(response.status, responseBody, responseTraceId)
                     );
                     (nonRetryableError as any).retryable = false;
+                    (nonRetryableError as any).proxyStatus = response.status;
+                    (nonRetryableError as any).proxyCode = parsedError?.code;
+                    (nonRetryableError as any).proxyRequestId = responseTraceId;
                     throw nonRetryableError;
                 }
 
@@ -190,13 +204,13 @@ export class OpenAIProxyProvider implements AIProvider {
                     parsedResponse as { requestId?: string }
                 );
                 if (responseTraceId && responseTraceId !== requestId) {
-                    console.warn('[OpenAIProxyProvider] request trace mismatch', {
+                    debugLog('[OpenAIProxyProvider] request trace mismatch', {
                         path,
                         clientRequestId: requestId,
                         proxyRequestId: responseTraceId
                     });
                 }
-                console.log('[OpenAIProxyProvider] response', {
+                debugLog('[OpenAIProxyProvider] response', {
                     path,
                     requestId,
                     proxyRequestId: responseTraceId
@@ -206,22 +220,38 @@ export class OpenAIProxyProvider implements AIProvider {
                 const isAbort = error?.name === 'AbortError';
                 const isRetryable = error?.retryable !== false;
                 const shouldRetry = isRetryable && attempt < retries;
-                console.warn('[OpenAIProxyProvider] request attempt failed', {
-                    path,
-                    requestId,
-                    attempt,
-                    isAbort,
-                    willRetry: shouldRetry
-                });
                 const baseMessage = isAbort
                     ? `Cloud request timed out after ${timeoutMs}ms`
-                    : trimErrorMessage(error?.message || 'Cloud request failed');
+                    : toSafeErrorMessage(error);
                 const requestTaggedMessage = /\(request [^)]+\)\s*$/i.test(baseMessage)
                     ? baseMessage
                     : `${baseMessage} (request ${requestId})`;
                 lastError = new Error(trimErrorMessage(requestTaggedMessage, 220));
 
-                if (!shouldRetry) break;
+                if (!shouldRetry) {
+                    console.warn('[OpenAIProxyProvider] request failed', {
+                        path,
+                        requestId,
+                        proxyRequestId: error?.proxyRequestId,
+                        status: error?.proxyStatus,
+                        errorCode: error?.proxyCode,
+                        isAbort,
+                        attempt,
+                        retries,
+                        message: toSafeErrorMessage(error)
+                    });
+                    break;
+                }
+                debugLog('[OpenAIProxyProvider] request attempt failed, retrying', {
+                    path,
+                    requestId,
+                    proxyRequestId: error?.proxyRequestId,
+                    status: error?.proxyStatus,
+                    errorCode: error?.proxyCode,
+                    isAbort,
+                    attempt,
+                    retries
+                });
                 await delay(300 * (attempt + 1));
             }
         }

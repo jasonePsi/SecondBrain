@@ -62,7 +62,7 @@ const normalizeReminderText = (action: Action | undefined): string => {
 };
 
 const getActionTitle = (feedType: string): string => {
-    if (feedType === 'action_done') return 'Reminder completed';
+    if (feedType === 'action_done') return 'Reminder marked done';
     if (feedType === 'action_canceled') return 'Reminder canceled';
     if (feedType === 'action_snoozed') return 'Reminder snoozed';
     return 'Reminder scheduled';
@@ -138,7 +138,7 @@ const toActionCard = (
 ): FeedCard => {
     const reminderText = normalizeReminderText(action);
     const scheduledAt = action?.scheduled_for || item.scheduled_for || null;
-    const whenLabel = scheduledAt ? ` for ${new Date(scheduledAt).toLocaleString()}` : '';
+    const whenLabel = scheduledAt ? ` · ${new Date(scheduledAt).toLocaleString()}` : '';
     const scopeType = (action?.scope_type || 'global') as SupportedScope;
     const scopeId = action?.scope_id || null;
 
@@ -146,7 +146,7 @@ const toActionCard = (
         id: item.id,
         feedType: item.type,
         title: getActionTitle(item.type),
-        description: `"${reminderText}"${whenLabel}`,
+        description: `${reminderText}${whenLabel}`,
         createdAt: item.created_at,
         route: routeForScope(scopeType, scopeId),
         scopeLabel: toScopeLabel(scopeType, scopeId, threadMap, spaceMap),
@@ -168,7 +168,7 @@ const toFactCard = (
             id: item.id,
             feedType: item.type,
             title: 'Fact captured',
-            description: `Fact reference ${item.ref_id}`,
+            description: 'A memory fact was captured.',
             createdAt: item.created_at
         };
     }
@@ -192,12 +192,15 @@ const toThreadCard = (
     const thread = threadMap.get(item.ref_id);
     const space = thread?.space_id ? spaceMap.get(thread.space_id) : undefined;
     const title = item.type === 'thread_updated' ? 'Thread updated' : 'Thread created';
+    const description = item.type === 'thread_updated'
+        ? (thread ? `"${thread.title}" was updated.` : 'A thread was updated.')
+        : (thread ? `Started "${thread.title}".` : 'A thread was created.');
 
     return {
         id: item.id,
         feedType: item.type,
         title,
-        description: thread ? thread.title : `Thread ${item.ref_id}`,
+        description,
         createdAt: item.created_at,
         route: item.ref_id ? `/thread/${item.ref_id}` : undefined,
         scopeLabel: space ? `Space: ${space.name}` : undefined
@@ -213,7 +216,7 @@ const toSpaceCard = (
         id: item.id,
         feedType: item.type,
         title: 'Space created',
-        description: space?.name || `Space ${item.ref_id}`,
+        description: space ? `Created "${space.name}".` : 'A space was created.',
         createdAt: item.created_at,
         route: item.ref_id ? `/space/${item.ref_id}` : undefined,
         scopeLabel: 'Space'

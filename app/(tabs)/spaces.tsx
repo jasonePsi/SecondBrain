@@ -155,11 +155,11 @@ export default function SpacesScreen() {
 
   if (error && !loading && spaces.length === 0) {
     return (
-      <View style={styles.container}>
+        <View style={styles.container}>
         <Stack.Screen options={{ title: 'Spaces' }} />
         <View style={styles.fullState}>
           <Text style={styles.errorStateText}>We could not load your spaces.</Text>
-          <Text style={styles.errorStateSubtext}>{error}</Text>
+          <Text style={styles.errorStateSubtext}>Please try again. You can still create a new space.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadSpaces}>
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
@@ -213,6 +213,9 @@ export default function SpacesScreen() {
                   <Text style={styles.inlineWarningAction}>Retry</Text>
                 </TouchableOpacity>
               </View>
+            )}
+            {loading && spaces.length > 0 && (
+              <Text style={styles.inlineHint}>Refreshing spaces…</Text>
             )}
             {isEditing && (
               <Text style={styles.inlineHint}>Editing enabled: reorder, rename, or delete spaces. Tap ✓ when done.</Text>

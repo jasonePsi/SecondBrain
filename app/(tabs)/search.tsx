@@ -67,11 +67,19 @@ export default function SearchScreen() {
     const [messageThreadTitles, setMessageThreadTitles] = useState<Record<string, string>>({});
     const [isSearching, setIsSearching] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [resultsQuery, setResultsQuery] = useState('');
     const [searchNonce, setSearchNonce] = useState(0);
     const searchTokenRef = useRef(0);
+    const resultsQueryRef = useRef('');
     const cancelInFlightSearch = () => {
         searchTokenRef.current += 1;
     };
+
+    useEffect(() => {
+        return () => {
+            cancelInFlightSearch();
+        };
+    }, []);
 
     useEffect(() => {
         const timeout = setTimeout(() => {
@@ -89,14 +97,23 @@ export default function SearchScreen() {
                 setThreads([]);
                 setMessages([]);
                 setMessageThreadTitles({});
+                setResultsQuery('');
+                resultsQueryRef.current = '';
                 setError(null);
                 setIsSearching(false);
                 return;
             }
 
             const searchToken = ++searchTokenRef.current;
+            const queryChanged = resultsQueryRef.current !== debouncedQuery;
             setIsSearching(true);
             setError(null);
+            if (queryChanged) {
+                setSpaces([]);
+                setThreads([]);
+                setMessages([]);
+                setMessageThreadTitles({});
+            }
             try {
                 const [spaceRows, threadRows, messageRows] = await Promise.all([
                     SpaceRepo.search(debouncedQuery),
@@ -115,6 +132,8 @@ export default function SearchScreen() {
                 setThreads(rankByStartsWith(threadRows, debouncedQuery, (item) => item.title));
                 setMessages(messageRows);
                 setMessageThreadTitles(nextMessageThreadTitles);
+                setResultsQuery(debouncedQuery);
+                resultsQueryRef.current = debouncedQuery;
             } catch (err: any) {
                 if (searchToken !== searchTokenRef.current) return;
                 console.error('Search failed:', err);
@@ -186,12 +205,19 @@ export default function SearchScreen() {
         cancelInFlightSearch();
         setQuery('');
         setDebouncedQuery('');
+        setResultsQuery('');
+        resultsQueryRef.current = '';
+        setSpaces([]);
+        setThreads([]);
+        setMessages([]);
+        setMessageThreadTitles({});
         setError(null);
         setIsSearching(false);
     };
 
     const retrySearch = () => {
         if (!debouncedQuery) return;
+        cancelInFlightSearch();
         setSearchNonce((prev) => prev + 1);
     };
 
@@ -260,7 +286,7 @@ export default function SearchScreen() {
             {isSearching && debouncedQuery.length > 0 && (
                 <Text style={styles.searchingText}>Searching for "{debouncedQuery}"…</Text>
             )}
-            {!!debouncedQuery && !isSearching && sections.length > 0 && (
+            {!!debouncedQuery && !isSearching && sections.length > 0 && resultsQuery === debouncedQuery && (
                 <Text style={styles.searchingText}>
                     {sections.reduce((sum, section) => sum + section.data.length, 0)} result(s) for "{debouncedQuery}"
                 </Text>
@@ -274,7 +300,7 @@ export default function SearchScreen() {
                 </View>
             )}
 
-            {!!debouncedQuery && !isSearching && sections.length === 0 && (
+            {!!debouncedQuery && !isSearching && sections.length === 0 && resultsQuery === debouncedQuery && !error && (
                 <View style={styles.emptyState}>
                     <Text style={styles.emptyTitle}>No results</Text>
                     <Text style={styles.emptyText}>No matches for "{debouncedQuery}". Try a broader phrase.</Text>
@@ -284,7 +310,7 @@ export default function SearchScreen() {
                 </View>
             )}
 
-            {sections.length > 0 && (
+            {sections.length > 0 && resultsQuery === debouncedQuery && (
                 <SectionList
                     sections={sections}
                     keyExtractor={(item) => `${item.type}-${item.id}`}

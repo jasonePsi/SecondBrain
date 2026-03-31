@@ -5,21 +5,18 @@ import serverModule from '../src/server.js';
 const { createServerApp, resolveConfig, validateConfig } = serverModule;
 const { resolvePrivacy, selectModel, isRetryableStatus } = serverModule.__proxyTestUtils;
 
-const originalConsoleLog = console.log;
-const originalConsoleWarn = console.warn;
-
-test.before(() => {
-  console.log = () => {};
-  console.warn = () => {};
-});
-
-test.after(() => {
-  console.log = originalConsoleLog;
-  console.warn = originalConsoleWarn;
-});
+const silentLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {}
+};
 
 const startServer = async (options = {}) => {
-  const { app } = createServerApp(options);
+  const { app } = createServerApp({
+    logger: silentLogger,
+    ...options
+  });
   const server = await new Promise((resolve) => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
   });

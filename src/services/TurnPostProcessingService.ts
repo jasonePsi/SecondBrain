@@ -8,6 +8,7 @@ import {
     runTurnPostProcessingPipeline
 } from './turn_post_processing_utils';
 import type { AIProviderType } from './LLMService';
+import { debugLog } from './runtime_log.ts';
 
 export interface TurnPostProcessingInput {
     threadId: string;
@@ -44,7 +45,7 @@ export const TurnPostProcessingService = {
             threadId: input.threadId
         };
 
-        console.log('[TurnPostProcessing] started', baseLog);
+        debugLog('[TurnPostProcessing] started', baseLog);
         const pipelineInput = {
             extract: async () => {
                 return await extractFromTurn(
@@ -79,7 +80,7 @@ export const TurnPostProcessingService = {
                 meta?: Record<string, unknown>;
             }) => {
                 if (event.stage === 'extraction' && event.status === 'done') {
-                    console.log('[TurnPostProcessing] extraction stage done', {
+                    debugLog('[TurnPostProcessing] extraction stage done', {
                         ...baseLog,
                         extractedOps: event.meta?.extractedOps,
                         parseError: event.meta?.parseError,
@@ -97,7 +98,7 @@ export const TurnPostProcessingService = {
                 }
 
                 if (event.stage === 'ops' && event.status === 'done') {
-                    console.log('[TurnPostProcessing] ops stage done', {
+                    debugLog('[TurnPostProcessing] ops stage done', {
                         ...baseLog,
                         executed: event.meta?.executed,
                         skipped: event.meta?.skipped,
@@ -115,7 +116,7 @@ export const TurnPostProcessingService = {
                 }
 
                 if (event.stage === 'summary' && event.status === 'done') {
-                    console.log('[TurnPostProcessing] summary stage done', {
+                    debugLog('[TurnPostProcessing] summary stage done', {
                         ...baseLog,
                         summaryUpdated: event.meta?.summaryUpdated,
                         summaryLength: event.meta?.summaryLength
@@ -150,7 +151,7 @@ export const TurnPostProcessingService = {
         const summary = pipelineResult.summary as SummaryUpdateResult;
         const outcome = pipelineResult.outcome;
 
-        console.log('[TurnPostProcessing] completed', {
+        debugLog('[TurnPostProcessing] completed', {
             ...baseLog,
             outcome,
             extractedOps: extraction.ops.length,

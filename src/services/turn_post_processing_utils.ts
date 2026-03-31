@@ -62,6 +62,22 @@ const toErrorMessage = (error: unknown, fallback: string): string => {
     return fallback;
 };
 
+const emitStageEvent = (
+    onStage: ((event: TurnPostProcessingStageEvent) => void) | undefined,
+    event: TurnPostProcessingStageEvent
+): void => {
+    if (!onStage) return;
+    try {
+        onStage(event);
+    } catch (error) {
+        console.warn('[TurnPostProcessing] stage callback failed', {
+            stage: event.stage,
+            status: event.status,
+            message: toErrorMessage(error, 'Stage callback failed')
+        });
+    }
+};
+
 export const emptyExtractionResult = (): TurnPostProcessingExtractionResult => ({
     raw: '',
     ops: [],
@@ -132,7 +148,7 @@ export const runTurnPostProcessingPipeline = async (
     let extraction = emptyExtractionResult();
     try {
         extraction = await input.extract();
-        onStage?.({
+        emitStageEvent(onStage, {
             stage: 'extraction',
             status: 'done',
             meta: {
@@ -145,7 +161,7 @@ export const runTurnPostProcessingPipeline = async (
         extraction = extractionExceptionResult(
             toErrorMessage(error, 'Structured extraction failed')
         );
-        onStage?.({
+        emitStageEvent(onStage, {
             stage: 'extraction',
             status: 'failed',
             detail: extraction.parseError
@@ -156,7 +172,7 @@ export const runTurnPostProcessingPipeline = async (
     if (extraction.ops.length > 0) {
         try {
             executionReport = await input.executeOps(extraction.ops);
-            onStage?.({
+            emitStageEvent(onStage, {
                 stage: 'ops',
                 status: 'done',
                 meta: {
@@ -170,7 +186,7 @@ export const runTurnPostProcessingPipeline = async (
                 extraction.ops.length,
                 toErrorMessage(error, 'Ops execution failed')
             );
-            onStage?.({
+            emitStageEvent(onStage, {
                 stage: 'ops',
                 status: 'failed',
                 detail: executionReport.logs[0]?.detail || 'Ops execution failed',
@@ -180,7 +196,7 @@ export const runTurnPostProcessingPipeline = async (
             });
         }
     } else {
-        onStage?.({
+        emitStageEvent(onStage, {
             stage: 'ops',
             status: 'skipped',
             detail: 'No extracted ops to execute'
@@ -190,7 +206,7 @@ export const runTurnPostProcessingPipeline = async (
     let summary = emptySummaryResult();
     try {
         summary = await input.updateSummary();
-        onStage?.({
+        emitStageEvent(onStage, {
             stage: 'summary',
             status: 'done',
             meta: {
@@ -199,7 +215,7 @@ export const runTurnPostProcessingPipeline = async (
             }
         });
     } catch (error) {
-        onStage?.({
+        emitStageEvent(onStage, {
             stage: 'summary',
             status: 'failed',
             detail: toErrorMessage(error, 'Summary update failed')
@@ -210,7 +226,7 @@ export const runTurnPostProcessingPipeline = async (
         parseError: extraction.parseError,
         failedCount: executionReport.failedCount
     });
-    onStage?.({
+    emitStageEvent(onStage, {
         stage: 'completed',
         status: outcome === 'ok' ? 'done' : 'failed',
         detail: outcome,

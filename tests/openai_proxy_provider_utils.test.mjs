@@ -300,3 +300,234 @@ test('OpenAIProxyProvider.process keeps extraction retries disabled by default',
     global.fetch = originalFetch;
   }
 });
+
+test('OpenAIProxyProvider.getStatus returns URL-missing status when proxy base URL is empty', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => '';
+
+  const status = await withMutedConsole(() => provider.getStatus());
+  assert.equal(status.available, false);
+  assert.equal(status.configured, false);
+  assert.equal(status.detailCode, 'CLOUD_PROXY_URL_MISSING');
+});
+
+test('OpenAIProxyProvider.getStatus maps non-2xx health responses with proxy trace id', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({ ok: false, code: 'DOWN' }),
+    {
+      status: 503,
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'proxy-health-503'
+      }
+    }
+  );
+
+  try {
+    const status = await withMutedConsole(() => provider.getStatus());
+    assert.equal(status.available, false);
+    assert.equal(status.configured, true);
+    assert.equal(status.detailCode, 'CLOUD_PROXY_HEALTH_HTTP_ERROR');
+    assert.equal(status.requestId, 'proxy-health-503');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.getStatus maps invalid health JSON to deterministic status', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response('not-json', {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'x-request-id': 'proxy-health-invalid-json'
+    }
+  });
+
+  try {
+    const status = await withMutedConsole(() => provider.getStatus());
+    assert.equal(status.available, false);
+    assert.equal(status.configured, true);
+    assert.equal(status.detailCode, 'CLOUD_PROXY_INVALID_HEALTH_RESPONSE');
+    assert.equal(status.requestId, 'proxy-health-invalid-json');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.chat rejects empty successful payload text', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({ text: '   ', requestId: 'proxy-empty-text' }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'proxy-empty-text'
+      }
+    }
+  );
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.chat([{ role: 'user', content: 'hello' }], { requestId: 'turn-empty-text' }),
+        /Cloud provider returned an empty response/
+      );
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.chat surfaces invalid JSON response with trace id', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response('not-json', {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'x-request-id': 'proxy-invalid-json-chat'
+    }
+  });
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.chat(
+          [{ role: 'user', content: 'hello' }],
+          { requestId: 'turn-invalid-json-chat', timeoutMs: 50 }
+        ),
+        /\[CLOUD_PROXY_INVALID_RESPONSE\].*request proxy-invalid-json-chat/
+      );
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.process returns raw extraction payload when json field is absent', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({ raw: '{"ops":[]}', requestId: 'proxy-extract-raw' }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'proxy-extract-raw'
+      }
+    }
+  );
+
+  try {
+    const raw = await withMutedConsole(() => provider.process('extract this'));
+    assert.equal(raw, '{"ops":[]}');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.process rejects responses without json or raw payload', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({ requestId: 'proxy-extract-empty' }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'proxy-extract-empty'
+      }
+    }
+  );
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.process('extract this'),
+        /Cloud extraction did not return structured JSON/
+      );
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.getStatus prefers body requestId when health header trace is missing', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({
+      ok: true,
+      configured: true,
+      code: 'OK',
+      requestId: 'health-body-trace-1'
+    }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json'
+      }
+    }
+  );
+
+  try {
+    const status = await withMutedConsole(() => provider.getStatus());
+    assert.equal(status.available, true);
+    assert.equal(status.configured, true);
+    assert.equal(status.requestId, 'health-body-trace-1');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('OpenAIProxyProvider.chat uses proxy header request id when non-2xx body is empty', async () => {
+  const provider = new OpenAIProxyProvider();
+  provider.getBaseUrl = () => 'http://127.0.0.1:8787';
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response('', {
+    status: 503,
+    headers: {
+      'x-request-id': 'proxy-header-503-empty',
+      'content-type': 'text/plain'
+    }
+  });
+
+  try {
+    await withMutedConsole(async () => {
+      await assert.rejects(
+        () => provider.chat(
+          [{ role: 'user', content: 'hello' }],
+          {
+            requestId: 'turn-empty-error',
+            timeoutMs: 50,
+            task: 'assistant'
+          }
+        ),
+        /request proxy-header-503-empty/
+      );
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

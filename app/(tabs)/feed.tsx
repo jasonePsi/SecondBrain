@@ -19,15 +19,15 @@ const formatTimestamp = (value: number): string => {
 };
 
 const getTypeLabel = (feedType: string): string => {
-    if (feedType === 'action_done') return 'Reminder Completed';
-    if (feedType === 'action_canceled') return 'Reminder Canceled';
-    if (feedType === 'action_snoozed') return 'Reminder Snoozed';
-    if (feedType === 'action_scheduled') return 'Reminder Scheduled';
-    if (feedType === 'thread_updated') return 'Thread Updated';
-    if (feedType === 'thread_created') return 'Thread Created';
-    if (feedType === 'space_created') return 'Space Created';
+    if (feedType === 'action_done') return 'Reminder completed';
+    if (feedType === 'action_canceled') return 'Reminder canceled';
+    if (feedType === 'action_snoozed') return 'Reminder snoozed';
+    if (feedType === 'action_scheduled') return 'Reminder scheduled';
+    if (feedType === 'thread_updated') return 'Thread updated';
+    if (feedType === 'thread_created') return 'Thread created';
+    if (feedType === 'space_created') return 'Space created';
     if (feedType.startsWith('action')) return 'Reminder';
-    if (feedType === 'fact') return 'Fact';
+    if (feedType === 'fact') return 'Memory';
     if (feedType.startsWith('thread')) return 'Thread';
     if (feedType.startsWith('space')) return 'Space';
     return 'Activity';
@@ -36,7 +36,7 @@ const getTypeLabel = (feedType: string): string => {
 const toActionStatusLabel = (status?: FeedCard['actionStatus']): string | null => {
     if (!status) return null;
     if (status === 'open') return 'Open';
-    if (status === 'done') return 'Done';
+    if (status === 'done') return 'Completed';
     if (status === 'canceled') return 'Canceled';
     return null;
 };
@@ -56,7 +56,7 @@ export default function FeedScreen() {
             setCards(next);
         } catch (err: any) {
             console.error('Feed refresh failed:', err);
-            setError('Could not refresh activity right now.');
+            setError('Activity is temporarily unavailable. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -106,7 +106,7 @@ export default function FeedScreen() {
                 )}
                 <Text style={styles.cardMeta}>{formatTimestamp(item.createdAt)}</Text>
                 {!!item.route && (
-                    <Text style={styles.routeHint}>Open related context</Text>
+                    <Text style={styles.routeHint}>Open context</Text>
                 )}
             </>
         );
@@ -197,13 +197,18 @@ export default function FeedScreen() {
                 }
                 ListHeaderComponent={(
                     <View style={styles.inlineHeaderState}>
-                        <Text style={styles.headerTitle}>Feed</Text>
+                        <View style={styles.headerRow}>
+                            <Text style={styles.headerTitle}>Feed</Text>
+                            <TouchableOpacity onPress={loadFeed} style={styles.refreshButton}>
+                                <Text style={styles.refreshButtonText}>Refresh</Text>
+                            </TouchableOpacity>
+                        </View>
                         <Text style={styles.headerSubtitle}>
-                            Recent activity from conversations, reminders, and memory updates.
+                            Recent updates from conversations, reminders, and memory.
                         </Text>
                         {!!error && (
                             <View style={styles.inlineWarningRow}>
-                                <Text style={styles.inlineError}>Refresh warning: {error}</Text>
+                                <Text style={styles.inlineError}>Refresh issue: {error}</Text>
                                 <TouchableOpacity onPress={loadFeed}>
                                     <Text style={styles.inlineWarningAction}>Retry</Text>
                                 </TouchableOpacity>
@@ -378,6 +383,24 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: Colors.text,
         marginBottom: 2
+    },
+    headerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between'
+    },
+    refreshButton: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        backgroundColor: Colors.card,
+        borderWidth: 1,
+        borderColor: Colors.border
+    },
+    refreshButtonText: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     headerSubtitle: {
         color: Colors.secondaryText,

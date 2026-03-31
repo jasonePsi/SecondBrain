@@ -22,11 +22,48 @@ const toBoolean = (value, defaultValue = false) => {
     return defaultValue;
 };
 
+const createDefaultLogger = (env = process.env) => {
+    const debugEnabled = toBoolean(env.OPENAI_PROXY_DEBUG_LOGS, false);
+    return {
+        debug: (...args) => {
+            if (!debugEnabled) return;
+            console.log(...args);
+        },
+        info: (...args) => console.log(...args),
+        warn: (...args) => console.warn(...args),
+        error: (...args) => console.error(...args)
+    };
+};
+
+const resolveLogger = (candidate, env = process.env) => {
+    const fallback = createDefaultLogger(env);
+    if (!candidate || typeof candidate !== 'object') {
+        return fallback;
+    }
+    return {
+        debug: typeof candidate.debug === 'function' ? candidate.debug : fallback.debug,
+        info: typeof candidate.info === 'function' ? candidate.info : fallback.info,
+        warn: typeof candidate.warn === 'function' ? candidate.warn : fallback.warn,
+        error: typeof candidate.error === 'function' ? candidate.error : fallback.error
+    };
+};
+
 const parsePositiveInteger = (value, fallback) => {
     if (value === undefined || value === null || value === '') return fallback;
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed <= 0) return NaN;
     return parsed;
+};
+
+const toSafeLogMessage = (value, fallback = 'Request failed') => {
+    const base = typeof value === 'string'
+        ? value
+        : (value && typeof value === 'object' && typeof value.message === 'string')
+            ? value.message
+            : fallback;
+    const normalized = base.replace(/\s+/g, ' ').trim();
+    if (!normalized) return fallback;
+    return normalized.slice(0, 220);
 };
 
 const normalizeRequestId = (value) => {
@@ -168,7 +205,12 @@ const toValidationMessage = (zodError, fallback) => {
     return `${fallback}: ${path} ${issueMessage}`.trim();
 };
 
-const resolveRequestIdFromPayload = (req, res, payloadRequestId) => {
+const resolveRequestIdFromPayload = (
+    req,
+    res,
+    payloadRequestId,
+    logger = createDefaultLogger()
+) => {
     const normalizedPayloadRequestId = normalizeRequestId(payloadRequestId);
     if (!normalizedPayloadRequestId) {
         return req.requestId;
@@ -176,7 +218,7 @@ const resolveRequestIdFromPayload = (req, res, payloadRequestId) => {
 
     if (req.requestIdSource === 'header') {
         if (req.requestId !== normalizedPayloadRequestId) {
-            console.warn('[openai-proxy] request id mismatch', {
+            logger.warn('[openai-proxy] request id mismatch', {
                 requestId: req.requestId,
                 payloadRequestId: normalizedPayloadRequestId
             });
@@ -250,6 +292,7 @@ const extractionJsonSchema = {
 const executeWithRetry = async (requestId, operation, config, options = {}) => {
     const retries = options.retries ?? 0;
     const operationName = options.operationName || 'openai_call';
+    const logger = options.logger || createDefaultLogger();
     let lastError = null;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -259,16 +302,22 @@ const executeWithRetry = async (requestId, operation, config, options = {}) => {
             const status = error && typeof error === 'object' ? error.status : undefined;
             const retryable = status === undefined || isRetryableStatus(status);
             const shouldRetry = retryable && attempt < retries;
-
-            lastError = error;
-            console.warn('[openai-proxy] request failed', {
+            const logPayload = {
                 requestId,
                 operation: operationName,
                 attempt,
+                retries,
                 status,
                 retryable,
-                message: error?.message
-            });
+                message: toSafeLogMessage(error, 'Upstream request failed')
+            };
+
+            lastError = error;
+            if (shouldRetry) {
+                logger.debug('[openai-proxy] transient upstream failure, retrying', logPayload);
+            } else {
+                logger.warn('[openai-proxy] upstream request failed', logPayload);
+            }
 
             if (!shouldRetry) break;
             await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
@@ -280,6 +329,7 @@ const executeWithRetry = async (requestId, operation, config, options = {}) => {
 
 const createServerApp = (options = {}) => {
     const config = options.config || resolveConfig();
+    const logger = resolveLogger(options.logger);
     const configValidation = validateConfig(config);
     if (configValidation.errors.length > 0) {
         throw new Error(
@@ -287,7 +337,7 @@ const createServerApp = (options = {}) => {
         );
     }
     if (configValidation.warnings.length > 0) {
-        console.warn('[openai-proxy] startup warnings', {
+        logger.warn('[openai-proxy] startup warnings', {
             warnings: configValidation.warnings
         });
     }
@@ -371,7 +421,7 @@ const createServerApp = (options = {}) => {
         const payloadRequestId = req.body && typeof req.body === 'object'
             ? req.body.requestId
             : undefined;
-        resolveRequestIdFromPayload(req, res, payloadRequestId);
+        resolveRequestIdFromPayload(req, res, payloadRequestId, logger);
         if (!parsed.success) {
             sendError(
                 res,
@@ -384,11 +434,11 @@ const createServerApp = (options = {}) => {
         }
 
         const payload = parsed.data;
-        resolveRequestIdFromPayload(req, res, payload.requestId);
+        resolveRequestIdFromPayload(req, res, payload.requestId, logger);
         const task = payload.task || 'assistant';
         const privacy = resolvePrivacy(payload.privacy, config);
         const model = selectModel(task, config);
-        console.log('[openai-proxy] chat request', {
+        logger.debug('[openai-proxy] chat request', {
             requestId: req.requestId,
             task,
             model,
@@ -413,7 +463,7 @@ const createServerApp = (options = {}) => {
                     }
                 }),
                 config,
-                { operationName: 'chat_response', retries: 0 }
+                { operationName: 'chat_response', retries: 0, logger }
             );
 
             const text = typeof completion.output_text === 'string'
@@ -424,7 +474,7 @@ const createServerApp = (options = {}) => {
                 throw new Error('OpenAI returned an empty response');
             }
 
-            console.log('[openai-proxy] chat success', {
+            logger.debug('[openai-proxy] chat success', {
                 requestId: req.requestId,
                 task,
                 model,
@@ -436,9 +486,9 @@ const createServerApp = (options = {}) => {
                 text
             });
         } catch (error) {
-            console.error('[openai-proxy] chat failed', {
+            logger.error('[openai-proxy] chat failed', {
                 requestId: req.requestId,
-                message: error?.message
+                message: toSafeLogMessage(error, 'Chat request failed')
             });
             sendError(
                 res,
@@ -466,7 +516,7 @@ const createServerApp = (options = {}) => {
         const payloadRequestId = req.body && typeof req.body === 'object'
             ? req.body.requestId
             : undefined;
-        resolveRequestIdFromPayload(req, res, payloadRequestId);
+        resolveRequestIdFromPayload(req, res, payloadRequestId, logger);
         if (!parsed.success) {
             sendError(
                 res,
@@ -479,11 +529,11 @@ const createServerApp = (options = {}) => {
         }
 
         const payload = parsed.data;
-        resolveRequestIdFromPayload(req, res, payload.requestId);
+        resolveRequestIdFromPayload(req, res, payload.requestId, logger);
         const task = payload.task || 'extraction';
         const privacy = resolvePrivacy(payload.privacy, config);
         const model = selectModel(task, config);
-        console.log('[openai-proxy] extract request', {
+        logger.debug('[openai-proxy] extract request', {
             requestId: req.requestId,
             task,
             model,
@@ -535,7 +585,7 @@ const createServerApp = (options = {}) => {
                     }
                 }),
                 config,
-                { operationName: 'extract_response', retries: 0 }
+                { operationName: 'extract_response', retries: 0, logger }
             );
 
             const raw = typeof response.output_text === 'string'
@@ -549,7 +599,7 @@ const createServerApp = (options = {}) => {
             const parsedJson = JSON.parse(raw);
             const validated = memoryOpsSchema.parse(parsedJson);
 
-            console.log('[openai-proxy] extract success', {
+            logger.debug('[openai-proxy] extract success', {
                 requestId: req.requestId,
                 task,
                 model,
@@ -561,9 +611,9 @@ const createServerApp = (options = {}) => {
                 json: validated
             });
         } catch (error) {
-            console.error('[openai-proxy] extract failed', {
+            logger.error('[openai-proxy] extract failed', {
                 requestId: req.requestId,
-                message: error?.message
+                message: toSafeLogMessage(error, 'Extraction request failed')
             });
             sendError(
                 res,
@@ -576,9 +626,9 @@ const createServerApp = (options = {}) => {
     });
 
     app.use((error, req, res, _next) => {
-        console.error('[openai-proxy] unhandled error', {
+        logger.error('[openai-proxy] unhandled error', {
             requestId: req.requestId,
-            message: error?.message
+            message: toSafeLogMessage(error, 'Unhandled proxy error')
         });
 
         sendError(
@@ -595,8 +645,9 @@ const createServerApp = (options = {}) => {
 
 const startProxyServer = (options = {}) => {
     const { app, config } = createServerApp(options);
+    const logger = resolveLogger(options.logger);
     const server = app.listen(config.port, config.host, () => {
-        console.log('[openai-proxy] listening', {
+        logger.info('[openai-proxy] listening', {
             host: config.host,
             port: config.port,
             requestTimeoutMs: config.requestTimeoutMs,
@@ -607,7 +658,7 @@ const startProxyServer = (options = {}) => {
             configured: Boolean(config.openaiApiKey)
         });
         if (!config.openaiApiKey) {
-            console.warn(
+            logger.warn(
                 '[openai-proxy] OPENAI_API_KEY is missing. Configure it to enable cloud endpoints.'
             );
         }

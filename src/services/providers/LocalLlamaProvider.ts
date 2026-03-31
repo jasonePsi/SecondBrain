@@ -1,6 +1,7 @@
 import { initLlama, LlamaContext } from 'llama.rn';
 import { ModelManager } from '../ModelManager';
 import { sanitizeAssistantResponse } from '../ai/sanitize';
+import { debugLog } from '../runtime_log.ts';
 import type {
     AIProvider,
     AIProviderStatus,
@@ -58,7 +59,7 @@ export class LocalLlamaProvider implements AIProvider {
         await this.release();
 
         this.activeModelId = activeModel.model_id;
-        console.log('[LocalLlamaProvider] Initializing', {
+        debugLog('[LocalLlamaProvider] initializing', {
             model: activeModel.model_id,
             path: activeModel.path
         });

@@ -11,6 +11,7 @@ import {
     estimateContextMessageChars,
     selectMessagesWithinCharBudget
 } from './memory_context_utils';
+import { debugLog } from './runtime_log.ts';
 
 const RECENT_MESSAGE_LIMIT = 10;
 const MAX_RETRIEVED_OLDER_MESSAGES = 4;
@@ -332,7 +333,7 @@ export const MemoryService = {
             chatMessages.push(message);
         });
 
-        console.log('[MemoryService] built context', {
+        debugLog('[MemoryService] built context', {
             turnId: options?.turnId,
             threadId,
             spaceId: thread.space_id,
@@ -435,7 +436,7 @@ export const MemoryService = {
             summary_message_count: totalMessages
         });
 
-        console.log('[MemoryService] summary updated', {
+        debugLog('[MemoryService] summary updated', {
             turnId: options?.turnId,
             threadId,
             totalMessages,

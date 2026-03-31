@@ -4,6 +4,7 @@ import { SpaceRepo } from '../repositories/space_repo';
 import { ThreadRepo } from '../repositories/thread_repo';
 import { FeedRepo } from '../repositories/feed_repo';
 import { normalizeScope, parseTimestamp, SupportedScope } from './ops_executor_utils';
+import { debugLog } from './runtime_log.ts';
 
 interface OpsExecutionLog {
     op: string;
@@ -189,7 +190,12 @@ export const OpsExecutor = {
                     status: 'failed',
                     detail: `#${index} ${error?.message || 'Execution failed'}`
                 });
-                console.error('[OpsExecutor] failed op', { opItem, error });
+                console.error('[OpsExecutor] failed op', {
+                    turnId: options?.turnId,
+                    index,
+                    op: op || 'UNKNOWN',
+                    message: error?.message || 'Execution failed'
+                });
             }
         }
 
@@ -200,7 +206,7 @@ export const OpsExecutor = {
             logs
         };
 
-        console.log('[OpsExecutor] execution report', {
+        debugLog('[OpsExecutor] execution report', {
             turnId: options?.turnId,
             ...report
         });

@@ -25,17 +25,29 @@ import { LLMService, sanitizeAssistantResponse } from '../../src/services/LLMSer
 import { MemoryService } from '../../src/services/MemoryService';
 import { TurnPostProcessingService } from '../../src/services/TurnPostProcessingService';
 import {
+    createTurnStageTracker,
     getAssistantFallbackReplyForStage,
     getUserFacingTurnErrorForStage,
     isCloudAssistantReplyFailureStage,
+    isProviderIssueTurnFailure,
     logTurnPostProcessingStage,
-    logTurnStageTransition,
+    shouldBlockProviderRetryForThread,
     shouldBlockSendForThread,
     shouldResetProviderReadinessForStage,
     TURN_POST_PROCESSING_STAGES,
     TURN_STAGES,
     type TurnStage
 } from '../../src/services/assistant_turn_utils';
+import {
+    buildHistorySnapshotFromNewest,
+    mergeOlderHistoryBatch,
+    resolveJumpTargetIndex,
+    resolveInitialVisibleCount,
+    resolveMutationRefreshVisibleCount,
+    shouldLoadOlderHistory
+} from '../../src/services/thread_history_utils';
+import { toUserFacingProviderMessage } from '../../src/services/provider_status_copy_utils';
+import { debugLog } from '../../src/services/runtime_log';
 
 type SupportedSpeechLanguage = 'el-GR' | 'en-US';
 type TurnProvider = 'local' | 'cloud';
@@ -45,6 +57,10 @@ type InFlightTurnState = {
     stage: TurnStage;
     provider?: TurnProvider;
     startedAt: number;
+};
+type JumpHint = {
+    kind: 'found' | 'older' | 'missing';
+    text: string;
 };
 
 const MESSAGE_PAGE_SIZE = 50;
@@ -92,51 +108,19 @@ const createTurnId = (): string => {
     return `turn_${Date.now()}_${suffix}`;
 };
 
-const toUserFacingProviderMessage = (error: unknown): string => {
-    const raw = error instanceof Error
-        ? error.message
-        : typeof error === 'string'
-            ? error
-            : '';
-    const trimmed = raw.trim();
-    if (trimmed.length > 0) {
-        const detailCode = trimmed.match(/^\[([A-Z0-9_]+)\]/)?.[1];
-        const withoutCodeAndTrace = trimmed
-            .replace(/^\[[A-Z0-9_]+\]\s*/, '')
-            .replace(/\s*\((trace|request) [^)]+\)\s*$/i, '')
-            .trim();
-
-        if (detailCode === 'CLOUD_PROXY_URL_MISSING') {
-            return 'Cloud proxy URL is missing. Set EXPO_PUBLIC_AI_PROXY_BASE_URL and retry.';
-        }
-        if (detailCode === 'PROXY_NOT_CONFIGURED') {
-            return 'Cloud proxy is reachable but not configured. Set OPENAI_API_KEY on the proxy and retry.';
-        }
-        if (detailCode === 'CLOUD_PROXY_UNREACHABLE') {
-            return 'Cloud proxy is unreachable. Verify URL/network and that backend-proxy is running.';
-        }
-        if (detailCode === 'CLOUD_PROXY_HEALTH_HTTP_ERROR') {
-            return 'Cloud proxy health check failed. Verify proxy URL and server status.';
-        }
-        if (detailCode === 'CLOUD_PROVIDER_STATUS_CHECK_FAILED') {
-            return 'Cloud availability check failed. Verify proxy URL/network and retry.';
-        }
-        if (detailCode === 'LOCAL_MODEL_NOT_SELECTED') {
-            return 'No active local model is selected. Choose one in Settings.';
-        }
-        if (detailCode === 'LOCAL_MODEL_FILE_MISSING') {
-            return 'Active local model file is missing. Reinstall or switch models in Settings.';
-        }
-        if (detailCode === 'LOCAL_PROVIDER_STATUS_CHECK_FAILED') {
-            return 'Local model status check failed. Open Settings and retry model setup.';
-        }
-        if (/timed out/i.test(withoutCodeAndTrace)) {
-            return 'Cloud request timed out. Check network/proxy latency and try again.';
-        }
-
-        return withoutCodeAndTrace;
+const toSafeErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error && error.message.trim().length > 0) return error.message.trim();
+    if (typeof error === 'string' && error.trim().length > 0) return error.trim();
+    if (
+        error
+        && typeof error === 'object'
+        && 'message' in error
+        && typeof (error as { message?: unknown }).message === 'string'
+        && (error as { message: string }).message.trim().length > 0
+    ) {
+        return (error as { message: string }).message.trim();
     }
-    return 'AI is unavailable. Check provider and model setup in Settings.';
+    return fallback;
 };
 
 export default function ThreadScreen() {
@@ -164,19 +148,24 @@ export default function ThreadScreen() {
     const inFlightTurnRef = useRef<InFlightTurnState | null>(null);
     const [micStatus, setMicStatus] = useState('Microphone ready');
     const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+    const [jumpHint, setJumpHint] = useState<JumpHint | null>(null);
     const lastJumpedMessageIdRef = useRef<string | null>(null);
     const flashListRef = useRef<any>(null);
+    const historySyncRequestRef = useRef(0);
 
     const [loadingInitialMessages, setLoadingInitialMessages] = useState(true);
     const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
     const [loadedMessageCount, setLoadedMessageCount] = useState(0);
+    const loadedMessageCountRef = useRef(0);
     const [totalMessageCount, setTotalMessageCount] = useState(0);
     const [hasOlderMessages, setHasOlderMessages] = useState(false);
     const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
+    const [historyLoadErrorSource, setHistoryLoadErrorSource] = useState<'initial' | 'older' | null>(null);
 
     const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
     const [renameValue, setRenameValue] = useState('');
-    const composerDisabled = isLoading || retryingProvider;
+    const providerUnavailable = !!llmInitError && !llmReady && !retryingProvider;
+    const interactionDisabled = isLoading || retryingProvider;
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -184,6 +173,10 @@ export default function ThreadScreen() {
             isMountedRef.current = false;
         };
     }, []);
+
+    useEffect(() => {
+        loadedMessageCountRef.current = loadedMessageCount;
+    }, [loadedMessageCount]);
 
     useEffect(() => {
         activeThreadIdRef.current = id || null;
@@ -199,9 +192,11 @@ export default function ThreadScreen() {
 
     const refreshLoadedMessages = useCallback(async (
         threadId: string,
-        targetVisibleCount = MESSAGE_PAGE_SIZE
+        targetVisibleCount = MESSAGE_PAGE_SIZE,
+        options?: { requestId?: number }
     ) => {
         if (!threadId) return;
+        const requestId = options?.requestId ?? (++historySyncRequestRef.current);
 
         const limit = Math.max(
             MESSAGE_PAGE_SIZE,
@@ -213,13 +208,15 @@ export default function ThreadScreen() {
             MessageRepo.listByThread(threadId, limit, 0)
         ]);
         if (!isCurrentThreadActive(threadId)) return;
+        if (requestId !== historySyncRequestRef.current) return;
 
-        const chronologicalMessages = [...newestMessages].sort((a, b) => a.created_at - b.created_at);
-        setMessages(chronologicalMessages);
-        setLoadedMessageCount(newestMessages.length);
-        setTotalMessageCount(totalCount);
-        setHasOlderMessages(newestMessages.length < totalCount);
+        const snapshot = buildHistorySnapshotFromNewest(newestMessages, totalCount);
+        setMessages(snapshot.messages);
+        setLoadedMessageCount(snapshot.loadedMessageCount);
+        setTotalMessageCount(snapshot.totalMessageCount);
+        setHasOlderMessages(snapshot.hasOlderMessages);
         setHistoryLoadError(null);
+        setHistoryLoadErrorSource(null);
     }, [isCurrentThreadActive]);
 
     const loadInitialMessages = useCallback(async () => {
@@ -228,25 +225,37 @@ export default function ThreadScreen() {
             setLoadingInitialMessages(false);
             return;
         }
+        const requestId = ++historySyncRequestRef.current;
         if (isCurrentThreadActive(threadId)) {
             setLoadingInitialMessages(true);
         }
         try {
-            let targetVisibleCount = MESSAGE_PAGE_SIZE;
+            let targetOffset: number | null = null;
             if (targetMessageId) {
-                const targetOffset = await MessageRepo.getOffsetFromNewest(threadId, targetMessageId);
-                if (typeof targetOffset === 'number' && targetOffset >= 0) {
-                    targetVisibleCount = Math.max(MESSAGE_PAGE_SIZE, targetOffset + 8);
-                }
+                const resolvedTargetOffset = await MessageRepo.getOffsetFromNewest(threadId, targetMessageId);
+                targetOffset = typeof resolvedTargetOffset === 'number' && resolvedTargetOffset >= 0
+                    ? resolvedTargetOffset
+                    : null;
             }
-            await refreshLoadedMessages(threadId, targetVisibleCount);
+            const targetVisibleCount = resolveInitialVisibleCount(MESSAGE_PAGE_SIZE, targetOffset, 8);
+            await refreshLoadedMessages(
+                threadId,
+                targetVisibleCount,
+                { requestId }
+            );
         } catch (error) {
-            console.error('Failed to load initial thread messages:', error);
+            console.warn('[ThreadHistory] initial load failed', {
+                threadId,
+                message: toSafeErrorMessage(error, 'Initial history load failed')
+            });
             if (isCurrentThreadActive(threadId)) {
+                if (requestId !== historySyncRequestRef.current) return;
                 setHistoryLoadError('Could not load conversation history right now.');
+                setHistoryLoadErrorSource('initial');
             }
         } finally {
             if (isCurrentThreadActive(threadId)) {
+                if (requestId !== historySyncRequestRef.current) return;
                 setLoadingInitialMessages(false);
             }
         }
@@ -254,37 +263,72 @@ export default function ThreadScreen() {
 
     const loadOlderMessages = useCallback(async () => {
         const threadId = id;
-        if (!threadId || loadingOlderMessages || !hasOlderMessages) return;
+        if (!shouldLoadOlderHistory({
+            threadId,
+            loadingOlderMessages,
+            hasOlderMessages,
+            turnInFlight: shouldBlockSendForThread(threadId, inFlightTurnRef.current, isLoading)
+                || retryingProvider
+        })) {
+            return;
+        }
+        const requestId = ++historySyncRequestRef.current;
 
         setLoadingOlderMessages(true);
         try {
             const olderBatch = await MessageRepo.listByThread(threadId, MESSAGE_PAGE_SIZE, loadedMessageCount);
             if (olderBatch.length === 0) {
                 if (isCurrentThreadActive(threadId)) {
+                    if (requestId !== historySyncRequestRef.current) return;
                     setHasOlderMessages(false);
+                    setHistoryLoadError(null);
+                    setHistoryLoadErrorSource(null);
                 }
                 return;
             }
 
-            const chronologicalOlderBatch = [...olderBatch].sort((a, b) => a.created_at - b.created_at);
-            const nextLoadedCount = loadedMessageCount + olderBatch.length;
-
             if (!isCurrentThreadActive(threadId)) return;
-            setMessages((prev) => [...chronologicalOlderBatch, ...prev]);
-            setLoadedMessageCount(nextLoadedCount);
-            setHasOlderMessages(nextLoadedCount < totalMessageCount);
+            if (requestId !== historySyncRequestRef.current) return;
+
+            const snapshot = mergeOlderHistoryBatch({
+                existingMessages: messages,
+                olderBatch,
+                loadedMessageCount,
+                totalMessageCount
+            });
+            setMessages(snapshot.messages);
+            setLoadedMessageCount(snapshot.loadedMessageCount);
+            setTotalMessageCount(snapshot.totalMessageCount);
+            setHasOlderMessages(snapshot.hasOlderMessages);
             setHistoryLoadError(null);
+            setHistoryLoadErrorSource(null);
         } catch (error) {
-            console.error('Failed to load older thread messages:', error);
+            console.warn('[ThreadHistory] older load failed', {
+                threadId,
+                loadedMessageCount,
+                message: toSafeErrorMessage(error, 'Older history load failed')
+            });
             if (isCurrentThreadActive(threadId)) {
+                if (requestId !== historySyncRequestRef.current) return;
                 setHistoryLoadError('Could not load earlier messages. Please retry.');
+                setHistoryLoadErrorSource('older');
             }
         } finally {
             if (isCurrentThreadActive(threadId)) {
                 setLoadingOlderMessages(false);
             }
         }
-    }, [hasOlderMessages, id, isCurrentThreadActive, loadedMessageCount, loadingOlderMessages, totalMessageCount]);
+    }, [
+        hasOlderMessages,
+        id,
+        isCurrentThreadActive,
+        isLoading,
+        loadedMessageCount,
+        loadingOlderMessages,
+        messages,
+        retryingProvider,
+        totalMessageCount
+    ]);
 
     useEffect(() => {
         const init = async () => {
@@ -307,9 +351,12 @@ export default function ThreadScreen() {
                             setLlmReady(true);
                             setLlmInitError(null);
                         }
-                        console.log('LLM initialized successfully');
+                        debugLog('[Thread] LLM initialized successfully', { threadId });
                     } catch (error) {
-                        console.error('Failed to initialize LLM:', error);
+                        console.warn('[Thread] LLM init failed', {
+                            threadId,
+                            message: toSafeErrorMessage(error, 'LLM init failed')
+                        });
                         if (!threadId || isCurrentThreadActive(threadId)) {
                             setLlmReady(false);
                             setLlmInitError(toUserFacingProviderMessage(error));
@@ -319,7 +366,10 @@ export default function ThreadScreen() {
                     }
                 }
             } catch (error) {
-                console.error('Failed to initialize thread screen:', error);
+                console.error('[Thread] screen initialization failed', {
+                    threadId: id,
+                    message: toSafeErrorMessage(error, 'Thread initialization failed')
+                });
                 if (!id || isCurrentThreadActive(id)) {
                     setLlmInitError('Could not load this thread. Go back and reopen it, or try again later.');
                 }
@@ -346,17 +396,39 @@ export default function ThreadScreen() {
     useEffect(() => {
         lastJumpedMessageIdRef.current = null;
         setHighlightedMessageId(null);
+        setJumpHint(null);
     }, [id, targetMessageId]);
 
     useEffect(() => {
-        if (!targetMessageId || messages.length === 0) return;
-        if (lastJumpedMessageIdRef.current === targetMessageId) return;
-
-        const targetIndex = messages.findIndex((message) => message.id === targetMessageId);
-        if (targetIndex < 0) return;
+        if (!targetMessageId) return;
+        const targetIndex = resolveJumpTargetIndex({
+            messages,
+            targetMessageId,
+            lastJumpedMessageId: lastJumpedMessageIdRef.current
+        });
+        if (targetIndex === null) {
+            if (loadingInitialMessages) return;
+            if (messages.some((message) => message.id === targetMessageId)) return;
+            if (hasOlderMessages) {
+                setJumpHint({
+                    kind: 'older',
+                    text: 'This message is in earlier history. Load earlier messages to jump to it.'
+                });
+            } else {
+                setJumpHint({
+                    kind: 'missing',
+                    text: 'This message is no longer available in this thread.'
+                });
+            }
+            return;
+        }
 
         lastJumpedMessageIdRef.current = targetMessageId;
         setHighlightedMessageId(targetMessageId);
+        setJumpHint({
+            kind: 'found',
+            text: 'Jumped to the matching message from search.'
+        });
 
         const scrollIndex = Math.max(0, targetIndex - 1);
         requestAnimationFrame(() => {
@@ -368,10 +440,13 @@ export default function ThreadScreen() {
             setHighlightedMessageId((current) => (
                 current === targetMessageId ? null : current
             ));
+            setJumpHint((current) => (
+                current?.kind === 'found' ? null : current
+            ));
         }, 3500);
 
         return () => clearTimeout(clearHighlightTimeout);
-    }, [messages, targetMessageId]);
+    }, [hasOlderMessages, loadingInitialMessages, messages, targetMessageId]);
 
     useSpeechRecognitionEvent('result', (event) => {
         if (event.results && event.results.length > 0) {
@@ -392,13 +467,109 @@ export default function ThreadScreen() {
         setMicStatus('Processing voice…');
     });
     useSpeechRecognitionEvent('error', (event) => {
-        console.error('Speech error:', event);
+        console.warn('[ThreadSpeech] speech recognition error', {
+            threadId: id,
+            code: typeof event?.error === 'string' ? event.error : 'unknown',
+            message: toSafeErrorMessage(
+                event?.message || event?.error,
+                'Speech recognition failed'
+            )
+        });
         setIsRecording(false);
         setMicStatus('Voice input unavailable');
         if (event.error === 'not-allowed') {
             Alert.alert('Permission Required', 'Please enable microphone access in Settings.');
         }
     });
+
+    const enqueueTurnPostProcessing = useCallback((params: {
+        turnId: string;
+        threadId: string;
+        provider?: TurnProvider;
+        spaceId: string | null;
+        userMessage: string;
+        assistantMessage: string;
+        canApplyTurnState: () => boolean;
+    }) => {
+        logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.QUEUED, {
+            turnId: params.turnId,
+            threadId: params.threadId,
+            provider: params.provider,
+            detail: 'assistant reply persisted'
+        });
+
+        postProcessingQueueRef.current = postProcessingQueueRef.current
+            .catch(() => undefined)
+            .then(async () => {
+                logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.RUNNING, {
+                    turnId: params.turnId,
+                    threadId: params.threadId,
+                    provider: params.provider
+                });
+                const postProcessResult = await TurnPostProcessingService.processTurn({
+                    threadId: params.threadId,
+                    spaceId: params.spaceId,
+                    userMessage: params.userMessage,
+                    assistantMessage: params.assistantMessage,
+                    turnId: params.turnId,
+                    provider: params.provider
+                });
+
+                debugLog('[ThreadTurn] post-processing finished', {
+                    turnId: params.turnId,
+                    threadId: params.threadId,
+                    provider: params.provider,
+                    extractedOps: postProcessResult.extraction.ops.length,
+                    droppedOps: postProcessResult.extraction.diagnostics.droppedOpsCount,
+                    executedOps: postProcessResult.executionReport.executedCount,
+                    failedOps: postProcessResult.executionReport.failedCount,
+                    summaryUpdated: postProcessResult.summary.updated
+                });
+                logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.COMPLETED, {
+                    turnId: params.turnId,
+                    threadId: params.threadId,
+                    provider: params.provider,
+                    detail: postProcessResult.executionReport.failedCount > 0
+                        ? 'completed with failed ops'
+                        : 'completed'
+                });
+
+                if (!params.canApplyTurnState()) return;
+                if (
+                    postProcessResult.executionReport.executedCount > 0 ||
+                    postProcessResult.summary.updated
+                ) {
+                    try {
+                        const latestThread = await ThreadRepo.get(params.threadId);
+                        if (latestThread) {
+                            setThreadTitle((current) => (
+                                current === latestThread.title ? current : latestThread.title
+                            ));
+                        }
+                    } catch (error: any) {
+                        console.warn('[ThreadTurn] post-processing UI refresh failed', {
+                            turnId: params.turnId,
+                            threadId: params.threadId,
+                            message: error?.message
+                        });
+                    }
+                }
+            })
+            .catch((error) => {
+                logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.FAILED, {
+                    turnId: params.turnId,
+                    threadId: params.threadId,
+                    provider: params.provider,
+                    detail: error?.message
+                });
+                console.warn('[ThreadTurn] post-processing queue failed', {
+                    turnId: params.turnId,
+                    threadId: params.threadId,
+                    stage: TURN_STAGES.QUEUE_POST_PROCESSING,
+                    error: error?.message
+                });
+            });
+    }, []);
 
     const sendMessage = async () => {
         if (!id) return;
@@ -423,7 +594,7 @@ export default function ThreadScreen() {
         }
         const blockedByInFlight = shouldBlockSendForThread(id, inFlightTurnRef.current, isLoading);
         if (blockedByInFlight) {
-            console.log('[ThreadTurn] send ignored', {
+            debugLog('[ThreadTurn] send ignored', {
                 threadId: id,
                 reason: isLoading ? 'loading' : 'in_flight_turn',
                 inFlightTurnId: inFlightTurnRef.current?.turnId || null,
@@ -437,14 +608,13 @@ export default function ThreadScreen() {
         }
 
         const threadId = id;
-        const refreshTargetCount = Math.max(MESSAGE_PAGE_SIZE, loadedMessageCount + 4);
         const turnId = createTurnId();
         const turnStartedAt = Date.now();
-        let turnStage: TurnStage = TURN_STAGES.START;
         let turnOutcome: 'completed' | 'failed' = 'completed';
         let userMessagePersisted = false;
         let assistantMessagePersisted = false;
         let activeProvider: TurnProvider | undefined;
+
         const syncInFlightTurn = (patch: Partial<InFlightTurnState>) => {
             const current = inFlightTurnRef.current;
             if (!current) return;
@@ -454,25 +624,17 @@ export default function ThreadScreen() {
                 ...patch
             };
         };
-        const advanceStage = (next: TurnStage, detail?: string): TurnStage => {
-            turnStage = logTurnStageTransition(turnStage, next, {
-                turnId,
-                threadId,
-                provider: activeProvider,
-                detail
-            });
-            syncInFlightTurn({
-                stage: turnStage,
-                provider: activeProvider
-            });
-            return turnStage;
-        };
         const refreshMessagesAfterMutation = async (
             stage: TurnStage,
             detail: string
         ): Promise<void> => {
             try {
-                await refreshLoadedMessages(threadId, refreshTargetCount);
+                const targetVisibleCount = resolveMutationRefreshVisibleCount(
+                    loadedMessageCountRef.current,
+                    MESSAGE_PAGE_SIZE,
+                    4
+                );
+                await refreshLoadedMessages(threadId, targetVisibleCount);
             } catch (error: any) {
                 console.warn('[ThreadTurn] refresh after mutation failed', {
                     turnId,
@@ -491,13 +653,36 @@ export default function ThreadScreen() {
             provider: activeProvider,
             startedAt: turnStartedAt
         };
+        const stageTracker = createTurnStageTracker({
+            turnId,
+            threadId,
+            provider: activeProvider,
+            initialStage: TURN_STAGES.START,
+            onStateChange: ({ stage, provider }) => {
+                activeProvider = provider as TurnProvider | undefined;
+                syncInFlightTurn({
+                    stage,
+                    provider: activeProvider
+                });
+            }
+        });
+        const advanceStage = (next: TurnStage, detail?: string): TurnStage => {
+            return stageTracker.advance(next, detail);
+        };
+        const setTurnProvider = (provider?: TurnProvider): void => {
+            activeProvider = provider;
+            stageTracker.setProvider(provider);
+        };
+        const getTurnStage = (): TurnStage => {
+            return stageTracker.getStage();
+        };
         const canApplyTurnState = (): boolean => isCurrentThreadActive(threadId);
         setInputText('');
         setTranscriptBuffer('');
         setIsLoading(true);
         setLlmInitError(null);
 
-        console.log('[ThreadTurn] start', {
+        debugLog('[ThreadTurn] start', {
             turnId,
             threadId,
             userChars: userMessage.length
@@ -509,7 +694,10 @@ export default function ThreadScreen() {
                 try {
                     await ExpoSpeechRecognitionModule.stop();
                 } catch (e: any) {
-                    console.error('[ThreadTurn] stop recording failed', { turnId, error: e?.message });
+                    console.warn('[ThreadTurn] stop recording failed', {
+                        turnId,
+                        message: toSafeErrorMessage(e, 'Stop recording failed')
+                    });
                 } finally {
                     if (canApplyTurnState()) {
                         setIsRecording(false);
@@ -524,9 +712,8 @@ export default function ThreadScreen() {
             await refreshMessagesAfterMutation(TURN_STAGES.PERSIST_USER_MESSAGE, 'user_message_persisted');
 
             advanceStage(TURN_STAGES.RESOLVE_PROVIDER);
-            activeProvider = await LLMService.resolveProviderForTurn();
-            syncInFlightTurn({ provider: activeProvider });
-            console.log('[ThreadTurn] provider resolved', {
+            setTurnProvider(await LLMService.resolveProviderForTurn());
+            debugLog('[ThreadTurn] provider resolved', {
                 turnId,
                 threadId,
                 provider: activeProvider
@@ -561,95 +748,27 @@ export default function ThreadScreen() {
             );
 
             advanceStage(TURN_STAGES.QUEUE_POST_PROCESSING);
-            logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.QUEUED, {
+            enqueueTurnPostProcessing({
                 turnId,
                 threadId,
                 provider: activeProvider,
-                detail: 'assistant reply persisted'
+                spaceId: memoryContext.spaceId,
+                userMessage,
+                assistantMessage: assistantReply,
+                canApplyTurnState
             });
-            postProcessingQueueRef.current = postProcessingQueueRef.current
-                .catch(() => undefined)
-                .then(async () => {
-                    logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.RUNNING, {
-                        turnId,
-                        threadId,
-                        provider: activeProvider
-                    });
-                    const postProcessResult = await TurnPostProcessingService.processTurn({
-                        threadId,
-                        spaceId: memoryContext.spaceId,
-                        userMessage,
-                        assistantMessage: assistantReply,
-                        turnId,
-                        provider: activeProvider
-                    });
-
-                    console.log('[ThreadTurn] post-processing finished', {
-                        turnId,
-                        threadId,
-                        provider: activeProvider,
-                        extractedOps: postProcessResult.extraction.ops.length,
-                        droppedOps: postProcessResult.extraction.diagnostics.droppedOpsCount,
-                        executedOps: postProcessResult.executionReport.executedCount,
-                        failedOps: postProcessResult.executionReport.failedCount,
-                        summaryUpdated: postProcessResult.summary.updated
-                    });
-                    logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.COMPLETED, {
-                        turnId,
-                        threadId,
-                        provider: activeProvider,
-                        detail: postProcessResult.executionReport.failedCount > 0
-                            ? 'completed with failed ops'
-                            : 'completed'
-                    });
-
-                    if (!canApplyTurnState()) return;
-                    if (
-                        postProcessResult.executionReport.executedCount > 0 ||
-                        postProcessResult.summary.updated
-                    ) {
-                        try {
-                            const latestThread = await ThreadRepo.get(threadId);
-                            if (latestThread) {
-                                setThreadTitle((current) => (
-                                    current === latestThread.title ? current : latestThread.title
-                                ));
-                            }
-                        } catch (error: any) {
-                            console.warn('[ThreadTurn] post-processing UI refresh failed', {
-                                turnId,
-                                threadId,
-                                message: error?.message
-                            });
-                        }
-                    }
-                })
-                .catch((error) => {
-                    logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.FAILED, {
-                        turnId,
-                        threadId,
-                        provider: activeProvider,
-                        detail: error?.message
-                    });
-                    console.warn('[ThreadTurn] post-processing queue failed', {
-                        turnId,
-                        threadId,
-                        stage: TURN_STAGES.QUEUE_POST_PROCESSING,
-                        error: error?.message
-                    });
-                });
 
             advanceStage(TURN_STAGES.COMPLETED);
-            console.log('[ThreadTurn] completed', {
+            debugLog('[ThreadTurn] completed', {
                 turnId,
                 threadId,
                 provider: activeProvider,
-                finalStage: turnStage,
+                finalStage: getTurnStage(),
                 elapsedMs: Date.now() - turnStartedAt
             });
         } catch (error: any) {
             turnOutcome = 'failed';
-            const failedAtStage: TurnStage = turnStage;
+            const failedAtStage: TurnStage = getTurnStage();
             advanceStage(TURN_STAGES.FAILED, error?.message);
             console.error('[ThreadTurn] failed', {
                 turnId,
@@ -685,14 +804,10 @@ export default function ThreadScreen() {
             }
 
             const providerErrorMessage = toUserFacingProviderMessage(error);
-            const isCloudGenerationFailure = isCloudAssistantReplyFailureStage(
-                activeProvider,
-                failedAtStage
-            );
-            const isProviderIssue =
-                shouldResetProviderReadinessForStage(failedAtStage)
-                || isCloudGenerationFailure;
-            if (shouldResetProviderReadinessForStage(failedAtStage)) {
+            const shouldResetProviderReadiness = shouldResetProviderReadinessForStage(failedAtStage);
+            const isCloudGenerationFailure = isCloudAssistantReplyFailureStage(activeProvider, failedAtStage);
+            const isProviderIssue = isProviderIssueTurnFailure(activeProvider, failedAtStage);
+            if (shouldResetProviderReadiness) {
                 if (canApplyTurnState()) {
                     setLlmReady(false);
                     setLlmInitError(providerErrorMessage);
@@ -732,12 +847,12 @@ export default function ThreadScreen() {
             if (isCurrentThread) {
                 setIsLoading(false);
             }
-            console.log('[ThreadTurn] finalized', {
+            debugLog('[ThreadTurn] finalized', {
                 turnId,
                 threadId,
                 provider: activeProvider,
                 outcome: turnOutcome,
-                finalStage: turnStage,
+                finalStage: getTurnStage(),
                 userMessagePersisted,
                 assistantMessagePersisted,
                 isCurrentThread,
@@ -755,6 +870,20 @@ export default function ThreadScreen() {
     }, []);
 
     const retryInitializeProvider = useCallback(async () => {
+        const blockedByInFlightTurn = shouldBlockProviderRetryForThread(
+            id,
+            inFlightTurnRef.current,
+            isLoading
+        );
+        if (blockedByInFlightTurn) {
+            if (id && isCurrentThreadActive(id)) {
+                setMicStatus('Assistant is still replying. Please wait…');
+            }
+            return;
+        }
+        if (llmInitializing.current || retryingProvider) {
+            return;
+        }
         try {
             setRetryingProvider(true);
             setMicStatus('Retrying AI connection…');
@@ -772,7 +901,7 @@ export default function ThreadScreen() {
                 setRetryingProvider(false);
             }
         }
-    }, []);
+    }, [id, isCurrentThreadActive, isLoading, retryingProvider]);
 
     const toggleRecording = useCallback(async () => {
         if (isRecording) {
@@ -780,7 +909,10 @@ export default function ThreadScreen() {
                 await ExpoSpeechRecognitionModule.stop();
                 setMicStatus('Microphone ready');
             } catch (e: any) {
-                console.error('Stop error:', e);
+                console.warn('[ThreadSpeech] stop failed', {
+                    threadId: id,
+                    message: toSafeErrorMessage(e, 'Could not stop microphone')
+                });
                 setMicStatus('Could not stop microphone');
             }
             setIsRecording(false);
@@ -806,7 +938,10 @@ export default function ThreadScreen() {
                     addsPunctuation: true,
                 });
             } catch (e: any) {
-                console.error('Start error:', e);
+                console.warn('[ThreadSpeech] start failed', {
+                    threadId: id,
+                    message: toSafeErrorMessage(e, 'Could not start microphone')
+                });
                 setIsRecording(false);
                 setMicStatus('Could not start microphone');
                 Alert.alert('Error', 'Could not start speech recognition.');
@@ -852,7 +987,10 @@ export default function ThreadScreen() {
             setThreadTitle(trimmed);
             closeRenameModal();
         } catch (error) {
-            console.error('Rename failed:', error);
+            console.warn('[Thread] rename failed', {
+                threadId: id,
+                message: toSafeErrorMessage(error, 'Rename failed')
+            });
             Alert.alert('Rename Failed', 'Could not rename this thread.');
         }
     };
@@ -872,7 +1010,10 @@ export default function ThreadScreen() {
                                 await ThreadRepo.delete(id);
                                 router.back();
                             } catch (error) {
-                                console.error('Delete failed:', error);
+                                console.warn('[Thread] delete failed', {
+                                    threadId: id,
+                                    message: toSafeErrorMessage(error, 'Delete failed')
+                                });
                                 Alert.alert('Delete Failed', 'Could not delete this thread.');
                             }
                         }
@@ -894,18 +1035,54 @@ export default function ThreadScreen() {
         );
     };
 
+    const retryHistoryLoad = useCallback(() => {
+        if (historyLoadErrorSource === 'older') {
+            loadOlderMessages();
+            return;
+        }
+        loadInitialMessages();
+    }, [historyLoadErrorSource, loadInitialMessages, loadOlderMessages]);
+
     const renderListHeader = () => {
-        const hasHistoryHeaderContent = totalMessageCount > 0 || !!historyLoadError;
+        const hasHistoryHeaderContent = totalMessageCount > 0 || !!historyLoadError || !!jumpHint;
         if (!hasHistoryHeaderContent) return null;
         const remaining = Math.max(0, totalMessageCount - loadedMessageCount);
+        const blockOlderLoad = shouldBlockSendForThread(
+            id,
+            inFlightTurnRef.current,
+            isLoading
+        ) || retryingProvider;
 
         return (
             <View style={styles.historyHeader}>
+                {!!jumpHint && (
+                    <View style={styles.jumpHintRow}>
+                        <Text style={[
+                            styles.jumpHintText,
+                            jumpHint.kind === 'missing' && styles.jumpHintMissingText
+                        ]}>
+                            {jumpHint.text}
+                        </Text>
+                        {(jumpHint.kind === 'older' && hasOlderMessages) ? (
+                            <TouchableOpacity onPress={loadOlderMessages} disabled={loadingOlderMessages || blockOlderLoad}>
+                                <Text style={styles.jumpHintAction}>
+                                    {loadingOlderMessages ? 'Loading…' : 'Load earlier'}
+                                </Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <TouchableOpacity onPress={() => setJumpHint(null)}>
+                                <Text style={styles.jumpHintAction}>Dismiss</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
                 {!!historyLoadError && (
                     <View style={styles.historyErrorRow}>
                         <Text style={styles.historyErrorText}>{historyLoadError}</Text>
-                        <TouchableOpacity onPress={loadInitialMessages}>
-                            <Text style={styles.historyErrorAction}>Retry</Text>
+                        <TouchableOpacity onPress={retryHistoryLoad}>
+                            <Text style={styles.historyErrorAction}>
+                                {historyLoadErrorSource === 'older' ? 'Retry older messages' : 'Retry'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -915,13 +1092,15 @@ export default function ThreadScreen() {
                             <TouchableOpacity
                             style={styles.loadOlderButton}
                             onPress={loadOlderMessages}
-                            disabled={loadingOlderMessages}
+                            disabled={loadingOlderMessages || blockOlderLoad}
                         >
                             {loadingOlderMessages ? (
                                 <View style={styles.loadOlderLoadingRow}>
                                     <ActivityIndicator size="small" color={Colors.primary} />
                                     <Text style={styles.loadOlderLoadingText}>Loading earlier messages…</Text>
                                 </View>
+                            ) : blockOlderLoad ? (
+                                <Text style={styles.loadOlderText}>Finish current reply before loading earlier messages</Text>
                             ) : (
                                 <Text style={styles.loadOlderText}>Load earlier messages ({remaining} remaining)</Text>
                             )}
@@ -970,7 +1149,13 @@ export default function ThreadScreen() {
                             renderItem={renderItem}
                             contentContainerStyle={{ padding: 16 }}
                             ListHeaderComponent={renderListHeader}
-                            ListEmptyComponent={<Text style={styles.emptyText}>No messages yet. Send a message to get started.</Text>}
+                            ListEmptyComponent={(
+                                <Text style={styles.emptyText}>
+                                    {historyLoadErrorSource === 'initial'
+                                        ? 'Conversation is unavailable right now. Use "Retry" above.'
+                                        : 'No messages yet. Send a message to get started.'}
+                                </Text>
+                            )}
                         />
                     )}
                 </View>
@@ -1006,8 +1191,8 @@ export default function ThreadScreen() {
                             value={inputText}
                             onChangeText={setInputText}
                             placeholder={
-                                llmInitError && !llmReady
-                                    ? 'AI unavailable. Open settings to fix provider/model setup'
+                                providerUnavailable
+                                    ? 'AI unavailable. Open Settings to fix provider/model setup'
                                     : retryingProvider
                                     ? 'Retrying AI connection…'
                                     : isLoading
@@ -1018,33 +1203,45 @@ export default function ThreadScreen() {
                             }
                             placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
                             multiline
-                            editable={!composerDisabled}
+                            editable={!interactionDisabled}
                         />
                         <TouchableOpacity
                             onPress={toggleLanguage}
                             style={styles.langButton}
-                            disabled={composerDisabled}
+                            disabled={interactionDisabled}
                         >
                             <Text style={styles.langText}>{speechLang === 'el-GR' ? '🇬🇷' : '🇬🇧'}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             onPress={toggleRecording}
                             style={[styles.micButton, isRecording && styles.micActive]}
-                            disabled={composerDisabled}
+                            disabled={interactionDisabled || providerUnavailable}
                         >
                             <Ionicons
                                 name={isRecording ? 'stop' : 'mic'}
                                 size={28}
-                                color={isRecording ? 'white' : (composerDisabled ? Colors.secondaryText : Colors.primary)}
+                                color={isRecording
+                                    ? 'white'
+                                    : (interactionDisabled || providerUnavailable
+                                        ? Colors.secondaryText
+                                        : Colors.primary)}
                             />
                         </TouchableOpacity>
-                        {composerDisabled ? (
+                        {interactionDisabled ? (
                             <View style={styles.sendButton}>
                                 <ActivityIndicator size="small" color={Colors.primary} />
                             </View>
                         ) : inputText.trim().length > 0 && (
-                            <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
-                                <Ionicons name="send" size={28} color={Colors.primary} />
+                            <TouchableOpacity
+                                onPress={sendMessage}
+                                style={[styles.sendButton, providerUnavailable && styles.sendButtonDisabled]}
+                                disabled={providerUnavailable}
+                            >
+                                <Ionicons
+                                    name="send"
+                                    size={28}
+                                    color={providerUnavailable ? Colors.secondaryText : Colors.primary}
+                                />
                             </TouchableOpacity>
                         )}
                     </View>
@@ -1121,6 +1318,25 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         alignItems: 'center',
         gap: 6
+    },
+    jumpHintRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 8
+    },
+    jumpHintText: {
+        flex: 1,
+        color: Colors.secondaryText,
+        fontSize: 12
+    },
+    jumpHintMissingText: {
+        color: Colors.notification
+    },
+    jumpHintAction: {
+        color: Colors.primary,
+        fontSize: 12,
+        fontWeight: '600'
     },
     historyErrorRow: {
         flexDirection: 'row',
@@ -1234,6 +1450,9 @@ const styles = StyleSheet.create({
     sendButton: {
         padding: 10,
         marginLeft: 4,
+    },
+    sendButtonDisabled: {
+        opacity: 0.55
     },
     langButton: {
         padding: 8,

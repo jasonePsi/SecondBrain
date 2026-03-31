@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createTurnStageTracker,
   getAssistantFallbackReplyForStage,
   getUserFacingTurnErrorForStage,
   isCloudAssistantReplyFailureStage,
+  isProviderIssueTurnFailure,
   isExpectedTurnStageTransition,
   isTerminalTurnStage,
   logTurnStageTransition,
   TURN_POST_PROCESSING_STAGES,
+  shouldBlockProviderRetryForThread,
   shouldBlockSendForThread,
   logTurnPostProcessingStage,
   shouldResetProviderReadinessForStage,
@@ -115,6 +118,13 @@ test('shouldBlockSendForThread blocks only same-thread in-flight turns or explic
   assert.equal(shouldBlockSendForThread('thread-1', { threadId: 'thread-1', turnId: 't1' }, true), true);
 });
 
+test('shouldBlockProviderRetryForThread mirrors in-flight/thread loading guard semantics', () => {
+  assert.equal(shouldBlockProviderRetryForThread('thread-1', null, false), false);
+  assert.equal(shouldBlockProviderRetryForThread('thread-1', { threadId: 'thread-1', turnId: 't1' }, false), true);
+  assert.equal(shouldBlockProviderRetryForThread('thread-2', { threadId: 'thread-1', turnId: 't1' }, false), false);
+  assert.equal(shouldBlockProviderRetryForThread('thread-1', { threadId: 'thread-1', turnId: 't1' }, true), true);
+});
+
 test('isExpectedTurnStageTransition allows forward transitions and terminal failure, blocks reverse/terminal transitions', () => {
   assert.equal(
     isExpectedTurnStageTransition(TURN_STAGES.START, TURN_STAGES.PERSIST_USER_MESSAGE),
@@ -181,6 +191,25 @@ test('isCloudAssistantReplyFailureStage identifies cloud generation-stage failur
   );
 });
 
+test('isProviderIssueTurnFailure combines provider-init and cloud-generation failure signals', () => {
+  assert.equal(
+    isProviderIssueTurnFailure('cloud', TURN_STAGES.RESOLVE_PROVIDER),
+    true
+  );
+  assert.equal(
+    isProviderIssueTurnFailure('cloud', TURN_STAGES.GENERATE_ASSISTANT_REPLY),
+    true
+  );
+  assert.equal(
+    isProviderIssueTurnFailure('local', TURN_STAGES.GENERATE_ASSISTANT_REPLY),
+    false
+  );
+  assert.equal(
+    isProviderIssueTurnFailure('local', TURN_STAGES.BUILD_MEMORY_CONTEXT),
+    false
+  );
+});
+
 test('logTurnPostProcessingStage is callable for stable stage instrumentation', () => {
   assert.doesNotThrow(() => withMutedConsole(() => {
     logTurnPostProcessingStage(TURN_POST_PROCESSING_STAGES.QUEUED, {
@@ -190,4 +219,39 @@ test('logTurnPostProcessingStage is callable for stable stage instrumentation', 
       detail: 'queued after assistant reply'
     });
   }));
+});
+
+test('createTurnStageTracker synchronizes stage/provider updates through callback', () => {
+  const snapshots = [];
+
+  const tracker = createTurnStageTracker({
+    turnId: 'turn-sync',
+    threadId: 'thread-sync',
+    onStateChange: (snapshot) => {
+      snapshots.push(`${snapshot.stage}:${snapshot.provider ?? 'none'}`);
+    }
+  });
+
+  tracker.setProvider('cloud');
+  tracker.advance(TURN_STAGES.PERSIST_USER_MESSAGE);
+  tracker.advance(TURN_STAGES.RESOLVE_PROVIDER);
+
+  assert.equal(tracker.getStage(), TURN_STAGES.RESOLVE_PROVIDER);
+  assert.equal(tracker.getProvider(), 'cloud');
+  assert.deepEqual(snapshots, [
+    'start:cloud',
+    'persist_user_message:cloud',
+    'resolve_provider:cloud'
+  ]);
+});
+
+test('createTurnStageTracker preserves stage when transition is unexpected', () => {
+  const tracker = createTurnStageTracker({
+    turnId: 'turn-unexpected-transition',
+    threadId: 'thread-unexpected-transition'
+  });
+
+  const next = withMutedConsole(() => tracker.advance(TURN_STAGES.INIT_PROVIDER));
+  assert.equal(next, TURN_STAGES.START);
+  assert.equal(tracker.getStage(), TURN_STAGES.START);
 });

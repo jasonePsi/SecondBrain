@@ -12,6 +12,7 @@ export default function ModelSelectionScreen() {
     const [selectedModel, setSelectedModel] = useState<string | null>(null);
     const [availableStorage, setAvailableStorage] = useState<number>(0);
     const [installedModelIds, setInstalledModelIds] = useState<Set<string>>(new Set());
+    const [missingInstalledCount, setMissingInstalledCount] = useState(0);
     const [activeModelId, setActiveModelId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -34,15 +35,28 @@ export default function ModelSelectionScreen() {
 
             const installedModels = await ModelManager.getInstalledModels();
             const activeModel = await ModelManager.getActiveModel();
-            const installedIds = new Set(installedModels.map((model) => model.model_id));
+            const installChecks = await Promise.all(
+                installedModels.map(async (model) => ({
+                    modelId: model.model_id,
+                    usable: await ModelManager.isInstalled(model.model_id)
+                }))
+            );
+            const installedIds = new Set(
+                installChecks
+                    .filter((item) => item.usable)
+                    .map((item) => item.modelId)
+            );
+            const missingCount = installChecks.filter((item) => !item.usable).length;
+            const activeIsUsable = !!activeModel?.model_id && installedIds.has(activeModel.model_id);
 
             setInstalledModelIds(installedIds);
-            setActiveModelId(activeModel?.model_id || null);
+            setMissingInstalledCount(missingCount);
+            setActiveModelId(activeIsUsable ? activeModel!.model_id : null);
 
-            if (activeModel?.model_id) {
+            if (activeIsUsable) {
                 setSelectedModel(activeModel.model_id);
-            } else if (installedModels.length > 0) {
-                setSelectedModel(installedModels[0].model_id);
+            } else if (installedIds.size > 0) {
+                setSelectedModel(Array.from(installedIds)[0]);
             } else {
                 // Auto-select a sensible default so first-run users can proceed immediately.
                 const fallbackModelId = freeDisk < 5_000_000_000
@@ -63,10 +77,10 @@ export default function ModelSelectionScreen() {
     };
 
     const formatBatteryImpact = (impact: ModelConfig['batteryImpact']) => {
-        if (impact === 'low') return '🔋 Low';
-        if (impact === 'medium') return '🔋 Medium';
-        if (impact === 'high') return '🔋 High';
-        return `🔋 ${String(impact || 'Unknown')}`;
+        if (impact === 'low') return 'Low impact';
+        if (impact === 'medium') return 'Medium impact';
+        if (impact === 'high') return 'High impact';
+        return String(impact || 'Unknown impact');
     };
 
     const getModelStatus = (modelId: string): 'active' | 'installed' | 'available' => {
@@ -128,6 +142,13 @@ export default function ModelSelectionScreen() {
                     </TouchableOpacity>
                 </View>
             )}
+            {missingInstalledCount > 0 && (
+                <View style={styles.warningBox}>
+                    <Text style={styles.warningText}>
+                        {missingInstalledCount} previously installed model entr{missingInstalledCount === 1 ? 'y is' : 'ies are'} missing local files and may need reinstalling from Settings.
+                    </Text>
+                </View>
+            )}
 
             {models.map((model) => (
                 <TouchableOpacity
@@ -146,7 +167,7 @@ export default function ModelSelectionScreen() {
                                 model.category === 'fast' ? styles.fastBadge : styles.smartBadge
                             ]}>
                                 <Text style={styles.categoryText}>
-                                    {model.category === 'fast' ? '⚡ Fast' : '🧠 Smart'}
+                                    {model.category === 'fast' ? 'Fast' : 'Smart'}
                                 </Text>
                             </View>
                         </View>
@@ -209,7 +230,7 @@ export default function ModelSelectionScreen() {
                     {availableStorage < model.sizeBytes * 1.5 && (
                         <View style={styles.warningBox}>
                             <Text style={styles.warningText}>
-                                ⚠️ Low storage. This model may not download successfully.
+                                Low storage. This model may not download successfully.
                             </Text>
                         </View>
                     )}
@@ -235,7 +256,7 @@ export default function ModelSelectionScreen() {
             <Text style={styles.continueHint}>
                 {selectedModel && installedModelIds.has(selectedModel)
                     ? 'This will set your active local model.'
-                    : 'Next step installs and activates this model before opening the app.'}
+                    : 'Next step installs and activates this model, then opens the app.'}
             </Text>
         </ScrollView>
     );

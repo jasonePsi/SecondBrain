@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runTurnPostProcessingPipeline } from '../src/services/turn_post_processing_utils.ts';
 
+const withMutedConsoleWarn = async (fn) => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = originalWarn;
+  }
+};
+
 test('runTurnPostProcessingPipeline degrades gracefully when extraction throws', async () => {
   let executeOpsCalls = 0;
   let updateSummaryCalls = 0;
@@ -281,4 +291,79 @@ test('runTurnPostProcessingPipeline keeps completed stage done when only summary
     'summary:failed',
     'completed:done'
   ]);
+});
+
+test('runTurnPostProcessingPipeline isolates onStage callback failures from pipeline result', async () => {
+  const seenEvents = [];
+
+  const result = await withMutedConsoleWarn(async () => {
+    return await runTurnPostProcessingPipeline({
+      extract: async () => ({
+        raw: '{"ops":[]}',
+        ops: [],
+        diagnostics: {
+          rawOpsCount: 0,
+          acceptedOpsCount: 0,
+          droppedOpsCount: 0,
+          droppedReasons: []
+        }
+      }),
+      executeOps: async () => ({
+        executedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        logs: []
+      }),
+      updateSummary: async () => ({
+        updated: false,
+        summaryLength: 0,
+        messageCount: 3
+      }),
+      onStage: (event) => {
+        seenEvents.push(`${event.stage}:${event.status}`);
+        if (event.stage === 'ops') {
+          throw new Error('observer failed');
+        }
+      }
+    });
+  });
+
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.summary.updated, false);
+  assert.deepEqual(seenEvents, [
+    'extraction:done',
+    'ops:skipped',
+    'summary:done',
+    'completed:done'
+  ]);
+});
+
+test('runTurnPostProcessingPipeline keeps degraded extraction result even when failed-stage callback throws', async () => {
+  const result = await withMutedConsoleWarn(async () => {
+    return await runTurnPostProcessingPipeline({
+      extract: async () => {
+        throw new Error('extract stage crashed');
+      },
+      executeOps: async () => ({
+        executedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        logs: []
+      }),
+      updateSummary: async () => ({
+        updated: false,
+        summaryLength: 0,
+        messageCount: 0
+      }),
+      onStage: (event) => {
+        if (event.stage === 'extraction' && event.status === 'failed') {
+          throw new Error('observer failed on extraction failure');
+        }
+      }
+    });
+  });
+
+  assert.equal(result.outcome, 'degraded');
+  assert.equal(result.extraction.parseError, 'extract stage crashed');
+  assert.equal(result.executionReport.failedCount, 0);
 });

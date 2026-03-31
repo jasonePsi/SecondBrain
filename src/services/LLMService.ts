@@ -10,6 +10,7 @@ import type {
 import { resolveProviderFromSetting } from './ai/provider_selection';
 import { LocalLlamaProvider } from './providers/LocalLlamaProvider';
 import { OpenAIProxyProvider } from './providers/OpenAIProxyProvider';
+import { debugLog } from './runtime_log.ts';
 
 const ACTIVE_AI_PROVIDER_KEY = 'active_ai_provider';
 
@@ -43,7 +44,7 @@ const runReleaseNow = async (reason: 'direct' | 'deferred'): Promise<void> => {
     }
 
     releaseInProgress = (async () => {
-        console.log('[LLMService] releasing providers', {
+        debugLog('[LLMService] releasing providers', {
             reason,
             inFlightRequests
         });
@@ -70,7 +71,7 @@ const withTrackedProviderRequest = async <T>(
     action: () => Promise<T>
 ): Promise<T> => {
     inFlightRequests += 1;
-    console.log('[LLMService] request started', {
+    debugLog('[LLMService] request started', {
         provider: context.provider,
         task: context.task,
         requestId: context.requestId,
@@ -81,7 +82,7 @@ const withTrackedProviderRequest = async <T>(
         return await action();
     } finally {
         inFlightRequests = Math.max(0, inFlightRequests - 1);
-        console.log('[LLMService] request finished', {
+        debugLog('[LLMService] request finished', {
             provider: context.provider,
             task: context.task,
             requestId: context.requestId,
@@ -93,7 +94,9 @@ const withTrackedProviderRequest = async <T>(
             try {
                 await flushDeferredReleaseIfIdle();
             } catch (error) {
-                console.warn('[LLMService] deferred release failed', error);
+                console.warn('[LLMService] deferred release failed', {
+                    message: toSafeErrorMessage(error, 'Deferred release failed')
+                });
             }
         }
     }
@@ -104,7 +107,9 @@ const getStoredProvider = async (): Promise<AIProviderType> => {
         const stored = await AppSettingsRepo.getString(ACTIVE_AI_PROVIDER_KEY);
         return resolveProviderFromSetting(stored, AIConfig.defaultProvider);
     } catch (error) {
-        console.warn('[LLMService] Failed to read active provider setting, using default', error);
+        console.warn('[LLMService] failed to read active provider setting, using default', {
+            message: toSafeErrorMessage(error, 'Provider setting lookup failed')
+        });
     }
     return AIConfig.defaultProvider;
 };
@@ -124,6 +129,10 @@ const normalizeError = (error: unknown, fallback: string): Error => {
         return new Error(error.trim());
     }
     return new Error(fallback);
+};
+
+const toSafeErrorMessage = (error: unknown, fallback: string): string => {
+    return normalizeError(error, fallback).message;
 };
 
 const formatProviderStatusError = (
@@ -202,7 +211,7 @@ export const LLMService = {
     release: async (): Promise<void> => {
         if (inFlightRequests > 0) {
             deferredReleaseRequested = true;
-            console.log('[LLMService] release deferred', {
+            debugLog('[LLMService] release deferred', {
                 inFlightRequests
             });
             return;
@@ -216,7 +225,7 @@ export const LLMService = {
     ): Promise<string> => {
         const providerType = await resolveProviderType(options?.provider);
         const provider = getProviderImplByType(providerType);
-        console.log('[LLMService] chat request', {
+        debugLog('[LLMService] chat request', {
             provider: providerType,
             task: options?.task || 'assistant',
             requestId: options?.requestId,
@@ -249,7 +258,7 @@ export const LLMService = {
     ): Promise<string> => {
         const providerType = await resolveProviderType(options?.provider);
         const provider = getProviderImplByType(providerType);
-        console.log('[LLMService] process request', {
+        debugLog('[LLMService] process request', {
             provider: providerType,
             task: options?.task || 'extraction',
             requestId: options?.requestId,
@@ -285,13 +294,16 @@ export const LLMService = {
     },
 
     setActiveProvider: async (provider: AIProviderType): Promise<void> => {
-        if (provider === 'cloud') {
-            const status = await getProviderStatusSafe('cloud');
-            if (!status.available) {
-                throw new Error(
-                    formatProviderStatusError(status, 'Cloud provider is unavailable')
-                );
-            }
+        const status = await getProviderStatusSafe(provider);
+        if (!status.available) {
+            throw new Error(
+                formatProviderStatusError(
+                    status,
+                    provider === 'cloud'
+                        ? 'Cloud provider is unavailable'
+                        : 'Local provider is unavailable'
+                )
+            );
         }
 
         await persistProvider(provider);

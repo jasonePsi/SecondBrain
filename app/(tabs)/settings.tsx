@@ -2,20 +2,26 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
+import { AIConfig } from '../../src/constants/AIConfig';
 import { ModelManager } from '../../src/services/ModelManager';
 import { LLMService } from '../../src/services/LLMService';
 import type { AIProviderStatus, AIProviderType } from '../../src/services/LLMService';
 import { getAllModels, getModelById, ModelConfig } from '../../src/constants/ModelRegistry';
 import { ModelSetting } from '../../src/repositories/model_repo';
+import { formatProviderStatusReason } from '../../src/services/provider_status_copy_utils';
 
 export default function SettingsScreen() {
     const [activeProvider, setActiveProvider] = useState<AIProviderType>('local');
     const [providerStatuses, setProviderStatuses] = useState<AIProviderStatus[]>([]);
     const [switchingProvider, setSwitchingProvider] = useState<AIProviderType | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [localFallbackWarning, setLocalFallbackWarning] = useState<string | null>(null);
 
     const [activeModel, setActiveModel] = useState<ModelSetting | null>(null);
     const [installedModels, setInstalledModels] = useState<ModelSetting[]>([]);
+    const [usableInstalledModelIds, setUsableInstalledModelIds] = useState<Set<string>>(new Set());
+    const [missingInstalledModelIds, setMissingInstalledModelIds] = useState<Set<string>>(new Set());
+    const [activeModelMissing, setActiveModelMissing] = useState(false);
     const [availableModels, setAvailableModels] = useState<ModelConfig[]>([]);
     const [downloading, setDownloading] = useState<string | null>(null);
     const [downloadProgress, setDownloadProgress] = useState(0);
@@ -27,16 +33,10 @@ export default function SettingsScreen() {
         }, [])
     );
 
-    const formatProviderReason = (status?: AIProviderStatus): string => {
-        if (!status) return 'Provider status is unknown. Tap Retry to refresh.';
-        const reason = status.reason?.trim();
-        const codePrefix = status.detailCode ? `[${status.detailCode}] ` : '';
-        const requestSuffix = status.requestId ? ` (trace ${status.requestId})` : '';
-        if (reason) return `${codePrefix}${reason}${requestSuffix}`;
-        if (!status.configured) return `${codePrefix}Provider is not configured${requestSuffix}`;
-        if (!status.available) return `${codePrefix}Provider is unavailable${requestSuffix}`;
-        return '';
-    };
+    const formatProviderReason = (
+        status?: AIProviderStatus,
+        includeDiagnostics = true
+    ): string => formatProviderStatusReason(status, { includeDiagnostics });
 
     const formatCheckTime = (value?: number): string => {
         if (!value) return '';
@@ -57,6 +57,7 @@ export default function SettingsScreen() {
         try {
             setLoading(true);
             setLoadError(null);
+            setLocalFallbackWarning(null);
             const [
                 selectedProvider,
                 statuses,
@@ -68,23 +69,59 @@ export default function SettingsScreen() {
                 ModelManager.getActiveModel(),
                 ModelManager.getInstalledModels()
             ]);
+            const installChecks = await Promise.all(
+                installed.map(async (model) => ({
+                    modelId: model.model_id,
+                    usable: await ModelManager.isInstalled(model.model_id)
+                }))
+            );
+            const usableIds = new Set(
+                installChecks
+                    .filter((item) => item.usable)
+                    .map((item) => item.modelId)
+            );
+            const missingIds = new Set(
+                installChecks
+                    .filter((item) => !item.usable)
+                    .map((item) => item.modelId)
+            );
+            const activeMissing = !!active && missingIds.has(active.model_id);
 
             const all = getAllModels();
             setActiveProvider(selectedProvider);
             setProviderStatuses(statuses);
             setActiveModel(active);
             setInstalledModels(installed);
+            setUsableInstalledModelIds(usableIds);
+            setMissingInstalledModelIds(missingIds);
+            setActiveModelMissing(activeMissing);
             setAvailableModels(all);
 
+            const localStatus = statuses.find((item) => item.provider === 'local');
             const selectedStatus = statuses.find((item) => item.provider === selectedProvider);
             if (selectedStatus && !selectedStatus.available) {
-                setLoadError(formatProviderReason(selectedStatus));
+                setLoadError(formatProviderReason(selectedStatus, false));
+            } else if (selectedProvider === 'local' && activeMissing) {
+                setLoadError('Active local model file is missing. Reinstall it or choose another model below.');
             } else if (!selectedStatus) {
-                setLoadError('Selected provider status is unknown. Tap Retry to refresh.');
+                setLoadError('Selected provider status is unavailable right now. Tap Retry.');
+            } else {
+                setLoadError(null);
+            }
+
+            if (selectedProvider === 'cloud') {
+                if (activeMissing) {
+                    setLocalFallbackWarning('Local fallback model file is missing. Reinstall it or set a different fallback model for offline use.');
+                } else if (!active && usableIds.size === 0) {
+                    setLocalFallbackWarning('No local fallback model is set. Cloud chat works, but offline mode requires installing a local model.');
+                } else if (localStatus && !localStatus.available) {
+                    setLocalFallbackWarning(formatProviderReason(localStatus, false));
+                }
             }
         } catch (error) {
             console.error('Error loading model data:', error);
             setLoadError('Could not refresh settings. Try again.');
+            setLocalFallbackWarning(null);
         } finally {
             setLoading(false);
         }
@@ -99,10 +136,10 @@ export default function SettingsScreen() {
         isActive: boolean
     ): string => {
         if (!status) return isActive ? 'Active · Checking' : 'Checking';
-        if (!status?.configured) return isActive ? 'Active · Setup Needed' : 'Setup Needed';
+        if (!status?.configured) return isActive ? 'Active · Setup Required' : 'Setup Required';
         if (isActive && status?.available === false) return 'Active · Unavailable';
         if (isActive) return 'Active';
-        if (status?.available) return 'Available';
+        if (status?.available) return 'Ready';
         return 'Unavailable';
     };
 
@@ -113,11 +150,10 @@ export default function SettingsScreen() {
             const latestStatus = await LLMService.getProviderStatus(provider);
             upsertProviderStatus(latestStatus);
 
-            if (provider === 'cloud') {
-                if (!latestStatus.available) {
-                    setLoadError(formatProviderReason(latestStatus));
-                    throw new Error(formatProviderReason(latestStatus));
-                }
+            if (!latestStatus.available) {
+                const unavailableReason = formatProviderReason(latestStatus, false);
+                setLoadError(unavailableReason);
+                throw new Error(unavailableReason);
             }
 
             await LLMService.setActiveProvider(provider);
@@ -128,7 +164,7 @@ export default function SettingsScreen() {
                 ? ' Current in-flight reply will finish first; switch applies to the next turn.'
                 : '';
             if (!refreshedStatus.available) {
-                const reason = formatProviderReason(refreshedStatus);
+                const reason = formatProviderReason(refreshedStatus, false);
                 setLoadError(reason);
                 Alert.alert(
                     'Provider Updated',
@@ -214,9 +250,19 @@ export default function SettingsScreen() {
 
                             if (result.deletedWasActive && result.fallbackActiveModelId) {
                                 const fallbackName = getModelById(result.fallbackActiveModelId)?.name || result.fallbackActiveModelId;
-                                Alert.alert('Model Deleted', `${fallbackName} is now active.`);
+                                Alert.alert(
+                                    'Model Deleted',
+                                    activeProvider === 'cloud'
+                                        ? `${fallbackName} is now set as local fallback. Cloud provider remains active.`
+                                        : `${fallbackName} is now active.`
+                                );
                             } else if (result.deletedWasActive) {
-                                Alert.alert('Model Deleted', 'No installed models remain. Install and activate a model to continue chatting.');
+                                Alert.alert(
+                                    'Model Deleted',
+                                    activeProvider === 'cloud'
+                                        ? 'Local fallback model was removed. Cloud provider remains active, but offline mode now requires installing a local model.'
+                                        : 'No installed models remain. Install and activate a model to continue chatting locally.'
+                                );
                             } else {
                                 Alert.alert('Model Deleted', 'Model removed from this device.');
                             }
@@ -236,29 +282,42 @@ export default function SettingsScreen() {
     };
 
     const getTotalStorageUsed = (): number => {
-        return installedModels.reduce((total, model) => total + model.size_bytes, 0);
+        return installedModels
+            .filter((model) => usableInstalledModelIds.has(model.model_id))
+            .reduce((total, model) => total + model.size_bytes, 0);
     };
 
     const isModelInstalled = (modelId: string): boolean => {
-        return installedModels.some(m => m.model_id === modelId);
+        return usableInstalledModelIds.has(modelId);
+    };
+
+    const hasModelRecord = (modelId: string): boolean => {
+        return installedModels.some((model) => model.model_id === modelId);
     };
 
     const getModelStatus = (
         modelId: string,
         isDownloading: boolean
-    ): 'available' | 'downloading' | 'installed' | 'active' => {
+    ): 'available' | 'downloading' | 'installed' | 'active' | 'missing' => {
         if (isDownloading) return 'downloading';
-        if (activeModel?.model_id === modelId) return 'active';
+        if (activeModel?.model_id === modelId) {
+            return missingInstalledModelIds.has(modelId) ? 'missing' : 'active';
+        }
+        if (!hasModelRecord(modelId)) return 'available';
         if (isModelInstalled(modelId)) return 'installed';
-        return 'available';
+        return 'missing';
     };
 
     const getStatusLabel = (status: ReturnType<typeof getModelStatus>): string => {
         if (status === 'active') return 'Active';
         if (status === 'installed') return 'Installed';
         if (status === 'downloading') return 'Downloading';
+        if (status === 'missing') return 'Missing File';
         return 'Available';
     };
+
+    const usableInstalledModels = installedModels.filter((model) => usableInstalledModelIds.has(model.model_id));
+    const missingModelCount = installedModels.length - usableInstalledModels.length;
 
     if (loading) {
         return (
@@ -295,12 +354,13 @@ export default function SettingsScreen() {
                     {
                         id: 'cloud' as AIProviderType,
                         name: 'OpenAI Cloud (Proxy)',
-                        description: 'Routes requests through your backend proxy (no API key in app).'
+                        description: 'Routes requests through your backend proxy (no API key in app).',
+                        privacyHint: `Privacy default: ${AIConfig.defaultPrivacy.mode} mode with storage ${AIConfig.defaultPrivacy.store ? 'enabled' : 'disabled'} unless explicitly overridden.`
                     }
                 ].map((option) => {
                     const status = getProviderStatus(option.id);
                     const isActive = activeProvider === option.id;
-                    const isUnavailable = option.id === 'cloud' && !!status && !status.available;
+                    const isUnavailable = !!status && !status.available;
                     const disabled = !!switchingProvider || isUnavailable;
 
                     return (
@@ -326,8 +386,11 @@ export default function SettingsScreen() {
                             </View>
 
                             <Text style={styles.providerDescription}>{option.description}</Text>
+                            {!!option.privacyHint && (
+                                <Text style={styles.providerCheckedAt}>{option.privacyHint}</Text>
+                            )}
                             {status && (!status.available || !status.configured || !!status.reason) && (
-                                <Text style={styles.providerReason}>{formatProviderReason(status)}</Text>
+                                <Text style={styles.providerReason}>{formatProviderReason(status, true)}</Text>
                             )}
                             {!!status?.lastCheckedAt && (
                                 <Text style={styles.providerCheckedAt}>
@@ -335,7 +398,7 @@ export default function SettingsScreen() {
                                 </Text>
                             )}
                             {!status && (
-                                <Text style={styles.providerReason}>Status not loaded yet. Tap Retry above.</Text>
+                                <Text style={styles.providerReason}>Status unavailable right now. Tap Retry above.</Text>
                             )}
 
                             {!isActive && (
@@ -351,8 +414,8 @@ export default function SettingsScreen() {
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
                                         <Text style={styles.providerSwitchButtonText}>
-                                            {isUnavailable && option.id === 'cloud'
-                                                ? 'Cloud Unavailable'
+                                            {isUnavailable
+                                                ? (status?.configured === false ? 'Setup Required' : 'Unavailable')
                                                 : (option.id === 'cloud' ? 'Switch to Cloud' : 'Switch to Local')}
                                         </Text>
                                     )}
@@ -369,13 +432,21 @@ export default function SettingsScreen() {
                     {activeProvider === 'cloud' ? 'Local Fallback Model' : 'Active Local Model'}
                 </Text>
                 {activeModel ? (
-                    <View style={styles.activeModelCard}>
+                    <View style={[
+                        styles.activeModelCard,
+                        activeModelMissing && styles.activeModelCardWarning
+                    ]}>
                         <Text style={styles.activeModelName}>
                             {getModelById(activeModel.model_id)?.name || 'Unknown Model'}
                         </Text>
                         <Text style={styles.activeModelInfo}>
                             Size: {formatBytes(activeModel.size_bytes)}
                         </Text>
+                        {activeModelMissing && (
+                            <Text style={styles.activeModelWarningText}>
+                                Local model file missing. Reinstall it or choose another model below.
+                            </Text>
+                        )}
                     </View>
                 ) : (
                     <>
@@ -384,14 +455,14 @@ export default function SettingsScreen() {
                                 ? 'No local fallback model selected'
                                 : 'No active model selected'}
                         </Text>
-                        {installedModels.length > 0 && (
+                        {usableInstalledModels.length > 0 && (
                             <Text style={styles.smallText}>
                                 {activeProvider === 'cloud'
                                     ? 'Optional: select one below for offline fallback.'
                                     : 'Select an installed model below to activate it.'}
                             </Text>
                         )}
-                        {installedModels.length === 0 && (
+                        {usableInstalledModels.length === 0 && (
                             <Text style={styles.smallText}>
                                 Install a local model below to enable offline chat.
                             </Text>
@@ -400,8 +471,11 @@ export default function SettingsScreen() {
                 )}
                 {activeProvider === 'cloud' && (
                     <Text style={styles.smallText}>
-                        Cloud is selected. This model is used when you switch to Local mode.
+                        Cloud is active. This model is kept as your offline fallback for Local mode.
                     </Text>
+                )}
+                {!!localFallbackWarning && (
+                    <Text style={styles.providerReason}>{localFallbackWarning}</Text>
                 )}
             </View>
 
@@ -412,8 +486,13 @@ export default function SettingsScreen() {
                     Total Used: {formatBytes(getTotalStorageUsed())}
                 </Text>
                 <Text style={styles.smallText}>
-                    {installedModels.length} model(s) installed
+                    {usableInstalledModels.length} model(s) installed
                 </Text>
+                {missingModelCount > 0 && (
+                    <Text style={styles.providerReason}>
+                        {missingModelCount} model entr{missingModelCount === 1 ? 'y needs' : 'ies need'} reinstall (file missing).
+                    </Text>
+                )}
             </View>
 
             {/* Available Models */}
@@ -426,10 +505,12 @@ export default function SettingsScreen() {
                 </Text>
 
                 {availableModels.map((model) => {
+                    const hasRecord = hasModelRecord(model.id);
                     const installed = isModelInstalled(model.id);
                     const isActive = activeModel?.model_id === model.id;
                     const isDownloading = downloading === model.id;
                     const modelStatus = getModelStatus(model.id, isDownloading);
+                    const missingInstall = hasRecord && !installed;
 
                     return (
                         <View key={model.id} style={styles.modelCard}>
@@ -439,6 +520,7 @@ export default function SettingsScreen() {
                                     styles.statusBadge,
                                     modelStatus === 'active' ? styles.statusActive :
                                         modelStatus === 'installed' ? styles.statusInstalled :
+                                            modelStatus === 'missing' ? styles.statusMissing :
                                             modelStatus === 'downloading' ? styles.statusDownloading : styles.statusAvailable
                                 ]}>
                                     <Text style={styles.statusBadgeText}>{getStatusLabel(modelStatus)}</Text>
@@ -464,13 +546,15 @@ export default function SettingsScreen() {
                                 </View>
                             ) : (
                                 <View style={styles.modelActions}>
-                                    {!installed ? (
+                                    {!hasRecord || missingInstall ? (
                                         <TouchableOpacity
                                             style={styles.downloadButton}
                                             onPress={() => handleDownloadModel(model.id)}
                                             disabled={!!downloading}
                                         >
-                                            <Text style={styles.downloadButtonText}>Install</Text>
+                                            <Text style={styles.downloadButtonText}>
+                                                {missingInstall ? 'Reinstall' : 'Install'}
+                                            </Text>
                                         </TouchableOpacity>
                                     ) : (
                                         <>
@@ -491,6 +575,14 @@ export default function SettingsScreen() {
                                                 <Text style={styles.deleteButtonText}>Delete</Text>
                                             </TouchableOpacity>
                                         </>
+                                    )}
+                                    {missingInstall && (
+                                        <TouchableOpacity
+                                            style={styles.deleteButton}
+                                            onPress={() => handleDeleteModel(model.id)}
+                                        >
+                                            <Text style={styles.deleteButtonText}>Delete</Text>
+                                        </TouchableOpacity>
                                     )}
                                 </View>
                             )}
@@ -576,6 +668,9 @@ const styles = StyleSheet.create({
         borderLeftWidth: 4,
         borderLeftColor: Colors.primary
     },
+    activeModelCardWarning: {
+        borderLeftColor: '#EF4444'
+    },
     providerCard: {
         padding: 12,
         borderRadius: 6,
@@ -653,6 +748,11 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: Colors.textSecondary
     },
+    activeModelWarningText: {
+        marginTop: 6,
+        fontSize: 12,
+        color: Colors.notification
+    },
     modelCard: {
         padding: 12,
         backgroundColor: Colors.background,
@@ -682,6 +782,9 @@ const styles = StyleSheet.create({
     },
     statusInstalled: {
         backgroundColor: '#DBEAFE'
+    },
+    statusMissing: {
+        backgroundColor: '#FEE2E2'
     },
     statusActive: {
         backgroundColor: '#DCFCE7'

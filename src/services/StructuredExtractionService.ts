@@ -8,6 +8,7 @@ import {
     validateOps,
     ValidatedStructuredOp
 } from './structured_extraction_utils';
+import { debugLog } from './runtime_log.ts';
 
 export interface StructuredExtractionResult {
     ops: ValidatedStructuredOp[];
@@ -57,7 +58,7 @@ export const StructuredExtractionService = {
                 rawLength: raw.length
             });
         } else {
-            console.log('[StructuredExtraction] parsed ops', {
+            debugLog('[StructuredExtraction] parsed ops', {
                 turnId: options?.turnId,
                 rawLength: raw.length,
                 opCount: parsed.ops.length,

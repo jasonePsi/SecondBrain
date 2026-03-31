@@ -1,4 +1,5 @@
 import type { AIProviderType } from './ai/types';
+import { debugLog } from './runtime_log.ts';
 
 export const TURN_STAGES = {
     START: 'start',
@@ -20,6 +21,11 @@ export const TERMINAL_TURN_STAGES = new Set<TurnStage>([
     TURN_STAGES.FAILED
 ]);
 
+interface InFlightTurnLike {
+    threadId: string;
+    turnId: string;
+}
+
 interface TurnStageTransitionContext {
     turnId: string;
     threadId: string;
@@ -32,6 +38,28 @@ interface TurnPostProcessingStageContext {
     threadId: string;
     provider?: AIProviderType;
     detail?: string;
+}
+
+interface TurnStageTrackerInput {
+    turnId: string;
+    threadId: string;
+    provider?: AIProviderType;
+    initialStage?: TurnStage;
+    onStateChange?: (snapshot: {
+        stage: TurnStage;
+        provider?: AIProviderType;
+    }) => void;
+}
+
+export interface TurnStageTracker {
+    getStage: () => TurnStage;
+    getProvider: () => AIProviderType | undefined;
+    setProvider: (provider?: AIProviderType) => void;
+    advance: (next: TurnStage, detail?: string) => TurnStage;
+    snapshot: () => {
+        stage: TurnStage;
+        provider?: AIProviderType;
+    };
 }
 
 const TURN_ALLOWED_TRANSITIONS: Record<TurnStage, ReadonlyArray<TurnStage>> = {
@@ -115,6 +143,14 @@ export const isCloudAssistantReplyFailureStage = (
     return provider === 'cloud' && stage === TURN_STAGES.GENERATE_ASSISTANT_REPLY;
 };
 
+export const isProviderIssueTurnFailure = (
+    provider: AIProviderType | undefined,
+    stage: TurnStage | string | undefined
+): boolean => {
+    return shouldResetProviderReadinessForStage(stage)
+        || isCloudAssistantReplyFailureStage(provider, stage);
+};
+
 export const getUserFacingTurnErrorForStage = (
     stage?: TurnStage | string
 ): string => {
@@ -158,7 +194,7 @@ export const logTurnStageTransition = (
         });
         return from;
     }
-    console.log('[ThreadTurn] stage', {
+    debugLog('[ThreadTurn] stage', {
         turnId: context.turnId,
         threadId: context.threadId,
         provider: context.provider,
@@ -175,9 +211,57 @@ export const isTerminalTurnStage = (stage?: TurnStage | string): boolean => {
     return TERMINAL_TURN_STAGES.has(stage as TurnStage);
 };
 
+export const createTurnStageTracker = (input: TurnStageTrackerInput): TurnStageTracker => {
+    let currentStage: TurnStage = input.initialStage ?? TURN_STAGES.START;
+    let currentProvider: AIProviderType | undefined = input.provider;
+
+    const emitState = () => {
+        input.onStateChange?.({
+            stage: currentStage,
+            provider: currentProvider
+        });
+    };
+
+    return {
+        getStage: () => currentStage,
+        getProvider: () => currentProvider,
+        setProvider: (provider?: AIProviderType) => {
+            if (currentProvider === provider) return;
+            currentProvider = provider;
+            emitState();
+        },
+        advance: (next: TurnStage, detail?: string): TurnStage => {
+            const transitioned = logTurnStageTransition(currentStage, next, {
+                turnId: input.turnId,
+                threadId: input.threadId,
+                provider: currentProvider,
+                detail
+            });
+            if (transitioned === currentStage) return currentStage;
+            currentStage = transitioned;
+            emitState();
+            return currentStage;
+        },
+        snapshot: () => ({
+            stage: currentStage,
+            provider: currentProvider
+        })
+    };
+};
+
 export const shouldBlockSendForThread = (
     currentThreadId: string | null | undefined,
-    inFlightTurn: { threadId: string; turnId: string } | null,
+    inFlightTurn: InFlightTurnLike | null,
+    isLoading: boolean
+): boolean => {
+    if (isLoading) return true;
+    if (!currentThreadId) return false;
+    return !!inFlightTurn && inFlightTurn.threadId === currentThreadId;
+};
+
+export const shouldBlockProviderRetryForThread = (
+    currentThreadId: string | null | undefined,
+    inFlightTurn: InFlightTurnLike | null,
     isLoading: boolean
 ): boolean => {
     if (isLoading) return true;
@@ -189,7 +273,7 @@ export const logTurnPostProcessingStage = (
     stage: TurnPostProcessingStage,
     context: TurnPostProcessingStageContext
 ): void => {
-    console.log('[ThreadTurn] post-processing stage', {
+    debugLog('[ThreadTurn] post-processing stage', {
         turnId: context.turnId,
         threadId: context.threadId,
         provider: context.provider,

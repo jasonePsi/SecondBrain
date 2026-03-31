@@ -12,13 +12,22 @@
    - app routes to onboarding model selection.
    - a local model is pre-selected automatically for first-run flow.
    - download flow labels are accurate.
+   - stale/missing local model files are not shown as installed.
 2. Install model in onboarding:
    - model downloads, activates, and app opens to Spaces.
 3. Settings:
    - install does not auto-switch active model.
    - explicit "Use This Model" changes active model (or "Set as Fallback" when cloud is active).
+   - switching provider is blocked when the target provider is unavailable, with an actionable reason.
 4. Delete active model:
    - fallback model becomes active if present, else active model is cleared.
+   - when cloud is active, deleting local active/fallback model keeps cloud active and updates fallback messaging clearly.
+5. Missing-file reconciliation:
+   - simulate a missing local model file (or stale metadata).
+   - Settings marks the model as `Missing File` (not `Installed`).
+   - if local provider is active and another usable model exists, startup switches to fallback automatically.
+   - if local provider is active, no active model is selected, and usable local models exist, startup activates a fallback model automatically.
+   - if no usable local files remain, startup routes to onboarding.
 
 ## Provider Availability (Cloud Unavailable Scenario)
 
@@ -50,12 +59,16 @@
    - "Load Older Messages" appears.
    - full history can be loaded without silent truncation.
    - while older messages load, status text is visible (not spinner-only).
+   - if older-history fetch fails, retry action is visible and works.
 4. Provider/model unavailable:
    - banner copy is actionable.
    - sending is blocked when provider is clearly unavailable.
    - retry path is visible from the banner.
-   - send alert includes an “Open Settings” action.
+   - send alert includes an "Open Settings" action.
    - while retrying AI, composer/mic actions stay disabled and show reconnecting state.
+5. Open a thread from a message search hit:
+   - thread shows a clear jump status ("jumped", "load earlier", or "message unavailable").
+   - when needed, "Load earlier" from jump status helps locate the message context.
 
 ## Memory + Feed
 
@@ -92,6 +105,8 @@
 6. Try a no-results query and verify friendly empty state with a “Clear search” action.
 7. Confirm message hits show role/thread/time context.
 8. Clear query while search is in-flight and confirm stale results do not reappear.
+9. Start a second query quickly after a first one and confirm previous-query results do not remain visible under the new query header.
+10. Re-run the same query using Retry and confirm results refresh once (no duplicate/flicker loop).
 
 ## States and Polish
 

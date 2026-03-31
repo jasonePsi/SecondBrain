@@ -1,6 +1,7 @@
 import { MessageRepo } from '../repositories/message_repo';
 import type { Message } from '../repositories/message_repo';
 import { rankOlderCandidates, scoreMessage, tokenize } from './retrieval_utils';
+import { debugLog } from './runtime_log.ts';
 
 const DEFAULT_RECENT_OFFSET = 12;
 const DEFAULT_CANDIDATE_LIMIT = 180;
@@ -45,7 +46,7 @@ export const RetrievalService = {
             maxResults
         );
 
-        console.log('[RetrievalService] older retrieval', {
+        debugLog('[RetrievalService] older retrieval', {
             turnId: options?.turnId,
             threadId,
             queryTokens: queryTokens.length,

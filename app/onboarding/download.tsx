@@ -12,7 +12,7 @@ const toUserFacingDownloadError = (error: unknown): string => {
     if (typeof error === 'string' && error.trim().length > 0) {
         return error.trim();
     }
-    return 'Download failed';
+    return 'Installation failed';
 };
 
 export default function DownloadScreen() {
@@ -77,7 +77,7 @@ export default function DownloadScreen() {
         <View style={styles.container}>
             <View style={styles.content}>
                 <Text style={styles.title}>
-                    {complete ? 'Model Ready' : downloading ? 'Installing Local Model' : 'Install Failed'}
+                    {complete ? 'Model Ready' : downloading ? 'Installing Local Model' : 'Installation Failed'}
                 </Text>
 
                 {modelConfig && (
@@ -114,7 +114,7 @@ export default function DownloadScreen() {
 
                         <Text style={styles.infoText}>
                             This may take a few minutes depending on your connection.
-                            {'\n'}Keep this screen open. Setup will continue automatically when complete.
+                            {'\n'}Keep this screen open. Setup continues automatically when complete.
                         </Text>
                     </>
                 )}
@@ -122,7 +122,7 @@ export default function DownloadScreen() {
                 {complete && (
                     <>
                         <Text style={styles.successText}>
-                            Model installed and activated. Opening your spaces…
+                            Model installed and activated. Opening Spaces...
                         </Text>
                     </>
                 )}
@@ -138,7 +138,7 @@ export default function DownloadScreen() {
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
-                            <Text style={styles.skipButtonText}>Choose a Different Model</Text>
+                            <Text style={styles.skipButtonText}>Back to Model Selection</Text>
                         </TouchableOpacity>
                     </>
                 )}
