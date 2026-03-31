@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -43,22 +43,40 @@ const toActionStatusLabel = (status?: FeedCard['actionStatus']): string | null =
 
 export default function FeedScreen() {
     const router = useRouter();
+    const isMountedRef = useRef(true);
+    const loadRequestRef = useRef(0);
     const [cards, setCards] = useState<FeedCard[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [updatingActionId, setUpdatingActionId] = useState<string | null>(null);
 
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
     const loadFeed = useCallback(async () => {
+        const requestId = ++loadRequestRef.current;
+        const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
         try {
-            setLoading(true);
-            setError(null);
+            if (canApply()) {
+                setLoading(true);
+                setError(null);
+            }
             const next = await FeedService.listCards(undefined, 120);
+            if (!canApply()) return;
             setCards(next);
         } catch (err: any) {
             console.error('Feed refresh failed:', err);
-            setError('Activity is temporarily unavailable. Please try again.');
+            if (canApply()) {
+                setError('Activity is temporarily unavailable. Please try again.');
+            }
         } finally {
-            setLoading(false);
+            if (canApply()) {
+                setLoading(false);
+            }
         }
     }, []);
 

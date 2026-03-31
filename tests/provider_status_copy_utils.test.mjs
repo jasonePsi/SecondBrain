@@ -76,6 +76,17 @@ test('toUserFacingProviderMessage keeps fallback for unknown non-empty errors', 
   assert.equal(message, 'Something else failed');
 });
 
+test('toUserFacingProviderMessage uses deterministic fallback for empty/non-string errors', () => {
+  assert.equal(
+    toUserFacingProviderMessage('   '),
+    'AI is unavailable. Check provider and model setup in Settings.'
+  );
+  assert.equal(
+    toUserFacingProviderMessage({}),
+    'AI is unavailable. Check provider and model setup in Settings.'
+  );
+});
+
 test('formatProviderStatusReason returns empty string for healthy status with no explicit reason', () => {
   const message = formatProviderStatusReason({
     provider: 'local',
@@ -91,4 +102,14 @@ test('formatProviderStatusReason uses deterministic fallback copy when status is
     unknownFallback: 'Status unavailable. Retry.'
   });
   assert.equal(message, 'Status unavailable. Retry.');
+});
+
+test('formatProviderStatusReason uses stable unavailable fallback when detail code and reason are absent', () => {
+  const message = formatProviderStatusReason({
+    provider: 'cloud',
+    label: 'Cloud',
+    available: false,
+    configured: true
+  });
+  assert.equal(message, 'Provider is currently unavailable.');
 });

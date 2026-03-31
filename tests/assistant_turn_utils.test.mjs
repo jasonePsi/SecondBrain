@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createInFlightTurnController,
   createTurnStageTracker,
   getAssistantFallbackReplyForStage,
   getUserFacingTurnErrorForStage,
@@ -254,4 +255,87 @@ test('createTurnStageTracker preserves stage when transition is unexpected', () 
   const next = withMutedConsole(() => tracker.advance(TURN_STAGES.INIT_PROVIDER));
   assert.equal(next, TURN_STAGES.START);
   assert.equal(tracker.getStage(), TURN_STAGES.START);
+});
+
+test('createInFlightTurnController keeps ref synchronized with stage/provider changes', () => {
+  const inFlightTurnRef = { current: null };
+  const controller = createInFlightTurnController({
+    inFlightTurnRef,
+    turnId: 'turn-controller',
+    threadId: 'thread-controller',
+    startedAt: 123
+  });
+
+  assert.equal(inFlightTurnRef.current.turnId, 'turn-controller');
+  assert.equal(inFlightTurnRef.current.threadId, 'thread-controller');
+  assert.equal(inFlightTurnRef.current.stage, TURN_STAGES.START);
+  assert.equal(inFlightTurnRef.current.provider, undefined);
+
+  controller.setProvider('cloud');
+  controller.advance(TURN_STAGES.PERSIST_USER_MESSAGE);
+
+  assert.equal(inFlightTurnRef.current.stage, TURN_STAGES.PERSIST_USER_MESSAGE);
+  assert.equal(inFlightTurnRef.current.provider, 'cloud');
+  assert.equal(controller.getStage(), TURN_STAGES.PERSIST_USER_MESSAGE);
+  assert.equal(controller.getProvider(), 'cloud');
+});
+
+test('createInFlightTurnController clears only the matching in-flight turn', () => {
+  const inFlightTurnRef = { current: null };
+  const controller = createInFlightTurnController({
+    inFlightTurnRef,
+    turnId: 'turn-controller-clear',
+    threadId: 'thread-controller-clear',
+    startedAt: 321
+  });
+
+  inFlightTurnRef.current = {
+    threadId: 'other-thread',
+    turnId: 'other-turn',
+    stage: TURN_STAGES.START,
+    provider: 'local',
+    startedAt: 0
+  };
+  controller.clearIfCurrent();
+  assert.equal(inFlightTurnRef.current.turnId, 'other-turn');
+
+  inFlightTurnRef.current = {
+    threadId: 'thread-controller-clear',
+    turnId: 'turn-controller-clear',
+    stage: TURN_STAGES.INIT_PROVIDER,
+    provider: 'cloud',
+    startedAt: 321
+  };
+  controller.clearIfCurrent();
+  assert.equal(inFlightTurnRef.current, null);
+});
+
+test('createTurnStageTracker does not emit state changes when provider value is unchanged', () => {
+  let emissions = 0;
+  const tracker = createTurnStageTracker({
+    turnId: 'turn-provider-noop',
+    threadId: 'thread-provider-noop',
+    provider: 'local',
+    onStateChange: () => {
+      emissions += 1;
+    }
+  });
+
+  tracker.setProvider('local');
+  assert.equal(emissions, 0);
+  assert.equal(tracker.getProvider(), 'local');
+});
+
+test('createInFlightTurnController clearIfCurrent is a safe no-op when ref is already empty', () => {
+  const inFlightTurnRef = { current: null };
+  const controller = createInFlightTurnController({
+    inFlightTurnRef,
+    turnId: 'turn-controller-empty',
+    threadId: 'thread-controller-empty',
+    startedAt: 999
+  });
+
+  inFlightTurnRef.current = null;
+  assert.doesNotThrow(() => controller.clearIfCurrent());
+  assert.equal(inFlightTurnRef.current, null);
 });

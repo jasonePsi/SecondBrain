@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
@@ -24,12 +24,16 @@ export default function DownloadScreen() {
     const [downloading, setDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [complete, setComplete] = useState(false);
+    const hasStartedRef = useRef(false);
 
     useEffect(() => {
+        if (hasStartedRef.current) return;
+        hasStartedRef.current = true;
         startDownload();
     }, []);
 
     const startDownload = async () => {
+        if (downloading) return;
         try {
             setDownloading(true);
             setError(null);
@@ -63,6 +67,7 @@ export default function DownloadScreen() {
     const handleRetry = () => {
         setProgress(0);
         setError(null);
+        hasStartedRef.current = true;
         startDownload();
     };
 

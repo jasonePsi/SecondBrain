@@ -21,9 +21,20 @@ export const TERMINAL_TURN_STAGES = new Set<TurnStage>([
     TURN_STAGES.FAILED
 ]);
 
+export interface InFlightTurnState {
+    threadId: string;
+    turnId: string;
+    stage: TurnStage;
+    provider?: AIProviderType;
+    startedAt: number;
+}
+
 interface InFlightTurnLike {
     threadId: string;
     turnId: string;
+    stage?: TurnStage;
+    provider?: AIProviderType;
+    startedAt?: number;
 }
 
 interface TurnStageTransitionContext {
@@ -60,6 +71,29 @@ export interface TurnStageTracker {
         stage: TurnStage;
         provider?: AIProviderType;
     };
+}
+
+interface InFlightTurnControllerInput {
+    inFlightTurnRef: {
+        current: InFlightTurnState | null;
+    };
+    turnId: string;
+    threadId: string;
+    startedAt: number;
+    provider?: AIProviderType;
+    initialStage?: TurnStage;
+}
+
+export interface InFlightTurnController {
+    turnId: string;
+    threadId: string;
+    startedAt: number;
+    getStage: () => TurnStage;
+    getProvider: () => AIProviderType | undefined;
+    setProvider: (provider?: AIProviderType) => void;
+    advance: (next: TurnStage, detail?: string) => TurnStage;
+    clearIfCurrent: () => void;
+    snapshot: () => InFlightTurnState;
 }
 
 const TURN_ALLOWED_TRANSITIONS: Record<TurnStage, ReadonlyArray<TurnStage>> = {
@@ -245,6 +279,59 @@ export const createTurnStageTracker = (input: TurnStageTrackerInput): TurnStageT
         snapshot: () => ({
             stage: currentStage,
             provider: currentProvider
+        })
+    };
+};
+
+export const createInFlightTurnController = (
+    input: InFlightTurnControllerInput
+): InFlightTurnController => {
+    const initialStage = input.initialStage ?? TURN_STAGES.START;
+
+    const writeInFlightState = (stage: TurnStage, provider?: AIProviderType): void => {
+        input.inFlightTurnRef.current = {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            stage,
+            provider,
+            startedAt: input.startedAt
+        };
+    };
+
+    const tracker = createTurnStageTracker({
+        turnId: input.turnId,
+        threadId: input.threadId,
+        provider: input.provider,
+        initialStage,
+        onStateChange: ({ stage, provider }) => {
+            writeInFlightState(stage, provider);
+        }
+    });
+
+    writeInFlightState(initialStage, input.provider);
+
+    const clearIfCurrent = (): void => {
+        const current = input.inFlightTurnRef.current;
+        if (!current) return;
+        if (current.turnId !== input.turnId || current.threadId !== input.threadId) return;
+        input.inFlightTurnRef.current = null;
+    };
+
+    return {
+        turnId: input.turnId,
+        threadId: input.threadId,
+        startedAt: input.startedAt,
+        getStage: tracker.getStage,
+        getProvider: tracker.getProvider,
+        setProvider: tracker.setProvider,
+        advance: tracker.advance,
+        clearIfCurrent,
+        snapshot: () => ({
+            threadId: input.threadId,
+            turnId: input.turnId,
+            stage: tracker.getStage(),
+            provider: tracker.getProvider(),
+            startedAt: input.startedAt
         })
     };
 };

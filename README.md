@@ -91,21 +91,30 @@ Risky changes to defer:
 
 Current triage status (March 31, 2026):
 
-- `backend-proxy`: 0 known advisories after a targeted `path-to-regexp` override
-- root app: remaining advisories are transitive (no direct vulnerable dependencies), mostly in Expo/CLI/Metro/codegen chains; they should be resolved as part of the next planned Expo SDK/toolchain upgrade cycle
+- `backend-proxy`: 0 known advisories after targeted `overrides` (`path-to-regexp`)
+- root app: 0 known advisories in both full and runtime-only audit.
+- root lockfile now applies low-risk same-major overrides to reduce risk without SDK churn:
+  - `ajv` -> `^8.18.0`
+  - `brace-expansion@2.0.2` -> `2.0.3` (scoped override)
+  - `node-forge` -> `^1.4.0`
+  - `tar` -> `^7.5.11`
+  - `undici` -> `^6.24.0`
+  - `yaml` -> `^2.8.3`
 
-Root advisory buckets currently map to:
+Deprecation warnings still present (tracked, non-audit):
 
-- `ajv` via `expo-build-properties`
-- `node-forge`, `tar`, `undici`, `picomatch` via `expo` / `@expo/cli`
-- `yaml` via Expo/Metro config toolchain
-- `minimatch`, `brace-expansion` via React Native codegen/build tooling
+- root install prints `inflight@1.0.6`, `rimraf@3`, and `glob@7` deprecations from transitive Expo/React Native tooling chains
+- proxy install prints `node-domexception@1.0.0` deprecation via `openai -> formdata-node`
 
 Planned future path:
 
-- upgrade Expo SDK / React Native toolchain in a dedicated branch
-- re-run `npm audit` + `npm audit --omit=dev`
-- only after SDK upgrade stabilizes, consider lockfile-wide `npm audit fix` and revalidate with `npm run verify:all`
+- avoid broad `npm audit fix` churn in the current release branch
+- clear deprecation chains as part of the next planned Expo SDK / React Native toolchain upgrade branch
+- re-run `npm audit` + `npm audit --omit=dev` and `npm run verify:all` after each dependency window
+
+Deprecation warning note:
+
+- these warnings are currently accepted for the release branch because they are transitive ecosystem constraints; do not force major framework upgrades just to silence install output.
 
 ## Backend Proxy Setup
 

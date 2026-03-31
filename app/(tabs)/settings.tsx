@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Colors } from '../../src/constants/Colors';
@@ -9,8 +9,15 @@ import type { AIProviderStatus, AIProviderType } from '../../src/services/LLMSer
 import { getAllModels, getModelById, ModelConfig } from '../../src/constants/ModelRegistry';
 import { ModelSetting } from '../../src/repositories/model_repo';
 import { formatProviderStatusReason } from '../../src/services/provider_status_copy_utils';
+import {
+    deriveSettingsProviderFeedback,
+    getProviderBadgeLabel,
+    getProviderSwitchState
+} from '../../src/services/settings_lifecycle_utils';
 
 export default function SettingsScreen() {
+    const isMountedRef = useRef(true);
+    const loadRequestRef = useRef(0);
     const [activeProvider, setActiveProvider] = useState<AIProviderType>('local');
     const [providerStatuses, setProviderStatuses] = useState<AIProviderStatus[]>([]);
     const [switchingProvider, setSwitchingProvider] = useState<AIProviderType | null>(null);
@@ -33,6 +40,13 @@ export default function SettingsScreen() {
         }, [])
     );
 
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
     const formatProviderReason = (
         status?: AIProviderStatus,
         includeDiagnostics = true
@@ -54,10 +68,14 @@ export default function SettingsScreen() {
     };
 
     const loadData = async () => {
+        const requestId = ++loadRequestRef.current;
+        const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
         try {
-            setLoading(true);
-            setLoadError(null);
-            setLocalFallbackWarning(null);
+            if (canApply()) {
+                setLoading(true);
+                setLoadError(null);
+                setLocalFallbackWarning(null);
+            }
             const [
                 selectedProvider,
                 statuses,
@@ -86,6 +104,7 @@ export default function SettingsScreen() {
                     .map((item) => item.modelId)
             );
             const activeMissing = !!active && missingIds.has(active.model_id);
+            if (!canApply()) return;
 
             const all = getAllModels();
             setActiveProvider(selectedProvider);
@@ -97,50 +116,31 @@ export default function SettingsScreen() {
             setActiveModelMissing(activeMissing);
             setAvailableModels(all);
 
-            const localStatus = statuses.find((item) => item.provider === 'local');
-            const selectedStatus = statuses.find((item) => item.provider === selectedProvider);
-            if (selectedStatus && !selectedStatus.available) {
-                setLoadError(formatProviderReason(selectedStatus, false));
-            } else if (selectedProvider === 'local' && activeMissing) {
-                setLoadError('Active local model file is missing. Reinstall it or choose another model below.');
-            } else if (!selectedStatus) {
-                setLoadError('Selected provider status is unavailable right now. Tap Retry.');
-            } else {
-                setLoadError(null);
-            }
-
-            if (selectedProvider === 'cloud') {
-                if (activeMissing) {
-                    setLocalFallbackWarning('Local fallback model file is missing. Reinstall it or set a different fallback model for offline use.');
-                } else if (!active && usableIds.size === 0) {
-                    setLocalFallbackWarning('No local fallback model is set. Cloud chat works, but offline mode requires installing a local model.');
-                } else if (localStatus && !localStatus.available) {
-                    setLocalFallbackWarning(formatProviderReason(localStatus, false));
-                }
-            }
+            const feedback = deriveSettingsProviderFeedback({
+                selectedProvider,
+                selectedProviderStatus: statuses.find((item) => item.provider === selectedProvider),
+                localProviderStatus: statuses.find((item) => item.provider === 'local'),
+                activeModelMissing: activeMissing,
+                hasActiveModel: !!active,
+                usableInstalledModelCount: usableIds.size
+            });
+            setLoadError(feedback.loadError);
+            setLocalFallbackWarning(feedback.localFallbackWarning);
         } catch (error) {
             console.error('Error loading model data:', error);
-            setLoadError('Could not refresh settings. Try again.');
-            setLocalFallbackWarning(null);
+            if (canApply()) {
+                setLoadError('Could not refresh settings. Try again.');
+                setLocalFallbackWarning(null);
+            }
         } finally {
-            setLoading(false);
+            if (canApply()) {
+                setLoading(false);
+            }
         }
     };
 
     const getProviderStatus = (provider: AIProviderType): AIProviderStatus | undefined => {
         return providerStatuses.find((item) => item.provider === provider);
-    };
-
-    const getProviderBadgeLabel = (
-        status: AIProviderStatus | undefined,
-        isActive: boolean
-    ): string => {
-        if (!status) return isActive ? 'Active · Checking' : 'Checking';
-        if (!status?.configured) return isActive ? 'Active · Setup Required' : 'Setup Required';
-        if (isActive && status?.available === false) return 'Active · Unavailable';
-        if (isActive) return 'Active';
-        if (status?.available) return 'Ready';
-        return 'Unavailable';
     };
 
     const handleSwitchProvider = async (provider: AIProviderType) => {
@@ -360,8 +360,12 @@ export default function SettingsScreen() {
                 ].map((option) => {
                     const status = getProviderStatus(option.id);
                     const isActive = activeProvider === option.id;
-                    const isUnavailable = !!status && !status.available;
-                    const disabled = !!switchingProvider || isUnavailable;
+                    const switchState = getProviderSwitchState({
+                        targetProvider: option.id,
+                        status,
+                        isActive,
+                        switchingProvider
+                    });
 
                     return (
                         <View key={option.id} style={styles.providerCard}>
@@ -380,7 +384,7 @@ export default function SettingsScreen() {
                                     )
                                 ]}>
                                     <Text style={styles.providerBadgeText}>
-                                        {getProviderBadgeLabel(status, isActive)}
+                                        {getProviderBadgeLabel({ status, isActive })}
                                     </Text>
                                 </View>
                             </View>
@@ -405,18 +409,16 @@ export default function SettingsScreen() {
                                 <TouchableOpacity
                                     style={[
                                         styles.providerSwitchButton,
-                                        disabled && styles.providerSwitchButtonDisabled
+                                        switchState.disabled && styles.providerSwitchButtonDisabled
                                     ]}
                                     onPress={() => handleSwitchProvider(option.id)}
-                                    disabled={disabled}
+                                    disabled={switchState.disabled}
                                 >
                                     {switchingProvider === option.id ? (
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
                                         <Text style={styles.providerSwitchButtonText}>
-                                            {isUnavailable
-                                                ? (status?.configured === false ? 'Setup Required' : 'Unavailable')
-                                                : (option.id === 'cloud' ? 'Switch to Cloud' : 'Switch to Local')}
+                                            {switchState.label}
                                         </Text>
                                     )}
                                 </TouchableOpacity>
@@ -595,7 +597,7 @@ export default function SettingsScreen() {
             {activeModel?.model_id === 'phi-3-mini' && (
                 <View style={styles.tipBox}>
                     <Text style={styles.tipText}>
-                        💡 Tip: Phi-3 uses more battery. Consider running batch operations only while charging.
+                        Tip: Phi-3 uses more battery. Consider running longer sessions while charging.
                     </Text>
                 </View>
             )}

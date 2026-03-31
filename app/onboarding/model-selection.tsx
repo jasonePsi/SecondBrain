@@ -77,10 +77,10 @@ export default function ModelSelectionScreen() {
     };
 
     const formatBatteryImpact = (impact: ModelConfig['batteryImpact']) => {
-        if (impact === 'low') return 'Low impact';
-        if (impact === 'medium') return 'Medium impact';
-        if (impact === 'high') return 'High impact';
-        return String(impact || 'Unknown impact');
+        if (impact === 'low') return 'Low';
+        if (impact === 'medium') return 'Medium';
+        if (impact === 'high') return 'High';
+        return 'Unknown';
     };
 
     const getModelStatus = (modelId: string): 'active' | 'installed' | 'available' => {
@@ -249,7 +249,7 @@ export default function ModelSelectionScreen() {
                     {submitting
                         ? 'Please wait…'
                         : selectedModel && installedModelIds.has(selectedModel)
-                        ? 'Continue with Selected Model'
+                        ? 'Use Selected Model'
                         : 'Download & Continue'}
                 </Text>
             </TouchableOpacity>

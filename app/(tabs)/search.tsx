@@ -71,6 +71,9 @@ export default function SearchScreen() {
     const [searchNonce, setSearchNonce] = useState(0);
     const searchTokenRef = useRef(0);
     const resultsQueryRef = useRef('');
+    const normalizedQuery = query.trim();
+    const isQuerySettled = normalizedQuery === debouncedQuery;
+    const hasStableResults = isQuerySettled && resultsQuery === normalizedQuery;
     const cancelInFlightSearch = () => {
         searchTokenRef.current += 1;
     };
@@ -283,16 +286,19 @@ export default function SearchScreen() {
                 </View>
             )}
 
-            {isSearching && debouncedQuery.length > 0 && (
-                <Text style={styles.searchingText}>Searching for "{debouncedQuery}"…</Text>
+            {normalizedQuery.length > 0 && !isQuerySettled && (
+                <Text style={styles.searchingText}>Keep typing to search…</Text>
             )}
-            {!!debouncedQuery && !isSearching && sections.length > 0 && resultsQuery === debouncedQuery && (
+            {isSearching && debouncedQuery.length > 0 && isQuerySettled && (
+                <Text style={styles.searchingText}>Searching for "{normalizedQuery}"…</Text>
+            )}
+            {!!normalizedQuery && !isSearching && sections.length > 0 && hasStableResults && (
                 <Text style={styles.searchingText}>
-                    {sections.reduce((sum, section) => sum + section.data.length, 0)} result(s) for "{debouncedQuery}"
+                    {sections.reduce((sum, section) => sum + section.data.length, 0)} result(s) for "{normalizedQuery}"
                 </Text>
             )}
 
-            {!debouncedQuery && (
+            {!normalizedQuery && (
                 <View style={styles.emptyState}>
                     <Ionicons name="search" size={46} color={Colors.border} />
                     <Text style={styles.emptyTitle}>Search your second brain</Text>
@@ -300,17 +306,17 @@ export default function SearchScreen() {
                 </View>
             )}
 
-            {!!debouncedQuery && !isSearching && sections.length === 0 && resultsQuery === debouncedQuery && !error && (
+            {!!normalizedQuery && !isSearching && sections.length === 0 && hasStableResults && !error && (
                 <View style={styles.emptyState}>
                     <Text style={styles.emptyTitle}>No results</Text>
-                    <Text style={styles.emptyText}>No matches for "{debouncedQuery}". Try a broader phrase.</Text>
+                    <Text style={styles.emptyText}>No matches for "{normalizedQuery}". Try a broader phrase.</Text>
                     <TouchableOpacity onPress={clearQuery} style={styles.emptyActionButton}>
                         <Text style={styles.emptyActionText}>Clear search</Text>
                     </TouchableOpacity>
                 </View>
             )}
 
-            {sections.length > 0 && resultsQuery === debouncedQuery && (
+            {sections.length > 0 && hasStableResults && (
                 <SectionList
                     sections={sections}
                     keyExtractor={(item) => `${item.type}-${item.id}`}

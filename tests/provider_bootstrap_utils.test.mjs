@@ -101,6 +101,17 @@ test('resolveLocalProviderInitialRoute uses explicit localStatusAvailable over l
   );
 });
 
+test('resolveLocalProviderInitialRoute treats explicit localStatusAvailable=true as authoritative', () => {
+  assert.equal(
+    resolveLocalProviderInitialRoute({
+      localAvailable: false,
+      localStatusAvailable: true,
+      usableInstalledModelCount: Number.NaN
+    }),
+    '/(tabs)/spaces'
+  );
+});
+
 test('resolveLocalProviderInitialRoute normalizes invalid model counts to deterministic fallback', () => {
   assert.equal(
     resolveLocalProviderInitialRoute({

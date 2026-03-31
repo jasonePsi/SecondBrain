@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     buildHistorySnapshotFromNewest,
+    JUMP_HINT_TEXT,
     mergeOlderHistoryBatch,
+    resolveJumpBehavior,
     resolveJumpTargetIndex,
     resolveInitialVisibleCount,
     resolveMutationRefreshVisibleCount,
@@ -62,6 +64,23 @@ test('mergeOlderHistoryBatch prepends older rows and de-duplicates overlap deter
   assert.equal(snapshot.loadedMessageCount, 4);
   assert.equal(snapshot.totalMessageCount, 4);
   assert.equal(snapshot.hasOlderMessages, false);
+});
+
+test('mergeOlderHistoryBatch keeps deterministic id ordering for same-timestamp merges', () => {
+  const snapshot = mergeOlderHistoryBatch({
+    existingMessages: [
+      { id: 'm3', created_at: 3000 },
+      { id: 'm4', created_at: 3000 }
+    ],
+    olderBatch: [
+      { id: 'm1', created_at: 1000 },
+      { id: 'm2', created_at: 3000 }
+    ],
+    loadedMessageCount: 2,
+    totalMessageCount: 4
+  });
+
+  assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3', 'm4']);
 });
 
 test('shouldLoadOlderHistory blocks when thread id is missing, currently loading, or no older messages', () => {
@@ -124,4 +143,95 @@ test('resolveJumpTargetIndex prevents duplicate or missing message jumps', () =>
   }), null);
   assert.equal(resolveJumpTargetIndex({ messages, targetMessageId: 'missing' }), null);
   assert.equal(resolveJumpTargetIndex({ messages: [], targetMessageId: 'm2' }), null);
+});
+
+test('resolveJumpBehavior waits while initial or older history is still loading', () => {
+  const messages = [
+    { id: 'm1', created_at: 1000 },
+    { id: 'm2', created_at: 2000 }
+  ];
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm9',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: true,
+    loadingOlderMessages: false,
+    hasOlderMessages: true
+  }), { kind: 'wait' });
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm9',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: false,
+    loadingOlderMessages: true,
+    hasOlderMessages: true
+  }), { kind: 'wait' });
+});
+
+test('resolveJumpBehavior returns none when no target message id is provided', () => {
+  const messages = [
+    { id: 'm1', created_at: 1000 },
+    { id: 'm2', created_at: 2000 }
+  ];
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: null,
+    lastJumpedMessageId: null,
+    loadingInitialMessages: false,
+    loadingOlderMessages: false,
+    hasOlderMessages: true
+  }), { kind: 'none' });
+});
+
+test('resolveJumpBehavior waits when target exists but has already been jumped', () => {
+  const messages = [
+    { id: 'm1', created_at: 1000 },
+    { id: 'm2', created_at: 2000 }
+  ];
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm2',
+    lastJumpedMessageId: 'm2',
+    loadingInitialMessages: false,
+    loadingOlderMessages: false,
+    hasOlderMessages: false
+  }), { kind: 'wait' });
+});
+
+test('resolveJumpBehavior returns deterministic jump/hint outcomes', () => {
+  const messages = [
+    { id: 'm1', created_at: 1000 },
+    { id: 'm2', created_at: 2000 }
+  ];
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm2',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: false,
+    loadingOlderMessages: false,
+    hasOlderMessages: true
+  }), { kind: 'jump', index: 1 });
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm9',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: false,
+    loadingOlderMessages: false,
+    hasOlderMessages: true
+  }), { kind: 'hint', hint: 'older', text: JUMP_HINT_TEXT.OLDER });
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm9',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: false,
+    loadingOlderMessages: false,
+    hasOlderMessages: false
+  }), { kind: 'hint', hint: 'missing', text: JUMP_HINT_TEXT.MISSING });
 });

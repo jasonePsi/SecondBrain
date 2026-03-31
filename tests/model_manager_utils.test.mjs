@@ -100,4 +100,12 @@ test('shouldAttemptLocalFallbackActivation blocks fallback for healthy provider,
     }),
     false
   );
+  assert.equal(
+    shouldAttemptLocalFallbackActivation({
+      localProviderAvailable: false,
+      localStatusDetailCode: 'LOCAL_MODEL_NOT_SELECTED',
+      usableInstalledModelCount: Number.NaN
+    }),
+    false
+  );
 });

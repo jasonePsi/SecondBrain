@@ -79,6 +79,7 @@ Runtime provider release is deferred while requests are in flight; provider swit
 Provider activation is availability-gated: unavailable providers are not persisted as active, so startup and thread behavior stay aligned with Settings.
 App-side success-path diagnostics are debug-gated (`__DEV__`, `SECOND_BRAIN_DEBUG_LOGS=1`, or `EXPO_PUBLIC_DEBUG_LOGS=1`) so production logs stay focused on warnings/errors.
 The shared app logger helper lives in `src/services/runtime_log.ts`.
+Settings badge/switch/error copy and fallback warnings are derived via `src/services/settings_lifecycle_utils.ts` and `src/services/provider_status_copy_utils.ts` to keep provider lifecycle messaging deterministic.
 
 Cloud provider error handling normalizes proxy failures into stable, user-safe messages.
 
@@ -89,6 +90,7 @@ Retry policy is conservative:
 - proxy does not retry upstream OpenAI calls by default
 
 Provider selection is persisted in `app_settings` (`active_ai_provider`) and managed from Settings.
+Settings provider/model refreshes are request-sequenced so stale async responses do not overwrite newer lifecycle state after install/delete/switch actions.
 
 ## Model Lifecycle
 

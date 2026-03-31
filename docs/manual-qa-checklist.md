@@ -19,6 +19,7 @@
    - install does not auto-switch active model.
    - explicit "Use This Model" changes active model (or "Set as Fallback" when cloud is active).
    - switching provider is blocked when the target provider is unavailable, with an actionable reason.
+   - rapid provider/model actions (switch + retry + refresh) do not revert to stale status cards/badges.
 4. Delete active model:
    - fallback model becomes active if present, else active model is cleared.
    - when cloud is active, deleting local active/fallback model keeps cloud active and updates fallback messaging clearly.
@@ -49,7 +50,10 @@
 4. Empty states:
    - Spaces tab shows a clear CTA to create a space.
    - Space detail shows a clear CTA to create a thread.
-5. Confirm no crashes when navigating between tabs quickly.
+5. Error-state navigation:
+   - Spaces load failure view includes both `Retry` and `Create Space`.
+   - Space detail load failure view includes both `Retry` and `Go to Spaces`.
+6. Confirm no crashes when navigating between tabs quickly.
 
 ## Thread UX
 
@@ -107,6 +111,7 @@
 8. Clear query while search is in-flight and confirm stale results do not reappear.
 9. Start a second query quickly after a first one and confirm previous-query results do not remain visible under the new query header.
 10. Re-run the same query using Retry and confirm results refresh once (no duplicate/flicker loop).
+11. While typing a new query, old settled results should not continue showing under the new text.
 
 ## States and Polish
 

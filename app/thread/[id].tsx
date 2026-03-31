@@ -25,9 +25,10 @@ import { LLMService, sanitizeAssistantResponse } from '../../src/services/LLMSer
 import { MemoryService } from '../../src/services/MemoryService';
 import { TurnPostProcessingService } from '../../src/services/TurnPostProcessingService';
 import {
-    createTurnStageTracker,
+    createInFlightTurnController,
     getAssistantFallbackReplyForStage,
     getUserFacingTurnErrorForStage,
+    type InFlightTurnState,
     isCloudAssistantReplyFailureStage,
     isProviderIssueTurnFailure,
     logTurnPostProcessingStage,
@@ -41,7 +42,7 @@ import {
 import {
     buildHistorySnapshotFromNewest,
     mergeOlderHistoryBatch,
-    resolveJumpTargetIndex,
+    resolveJumpBehavior,
     resolveInitialVisibleCount,
     resolveMutationRefreshVisibleCount,
     shouldLoadOlderHistory
@@ -51,13 +52,6 @@ import { debugLog } from '../../src/services/runtime_log';
 
 type SupportedSpeechLanguage = 'el-GR' | 'en-US';
 type TurnProvider = 'local' | 'cloud';
-type InFlightTurnState = {
-    threadId: string;
-    turnId: string;
-    stage: TurnStage;
-    provider?: TurnProvider;
-    startedAt: number;
-};
 type JumpHint = {
     kind: 'found' | 'older' | 'missing';
     text: string;
@@ -401,27 +395,23 @@ export default function ThreadScreen() {
 
     useEffect(() => {
         if (!targetMessageId) return;
-        const targetIndex = resolveJumpTargetIndex({
+        const jumpBehavior = resolveJumpBehavior({
             messages,
             targetMessageId,
-            lastJumpedMessageId: lastJumpedMessageIdRef.current
+            lastJumpedMessageId: lastJumpedMessageIdRef.current,
+            loadingInitialMessages,
+            loadingOlderMessages,
+            hasOlderMessages
         });
-        if (targetIndex === null) {
-            if (loadingInitialMessages) return;
-            if (messages.some((message) => message.id === targetMessageId)) return;
-            if (hasOlderMessages) {
-                setJumpHint({
-                    kind: 'older',
-                    text: 'This message is in earlier history. Load earlier messages to jump to it.'
-                });
-            } else {
-                setJumpHint({
-                    kind: 'missing',
-                    text: 'This message is no longer available in this thread.'
-                });
-            }
+        if (jumpBehavior.kind === 'none' || jumpBehavior.kind === 'wait') return;
+        if (jumpBehavior.kind === 'hint') {
+            setJumpHint({
+                kind: jumpBehavior.hint,
+                text: jumpBehavior.text
+            });
             return;
         }
+        const targetIndex = jumpBehavior.index;
 
         lastJumpedMessageIdRef.current = targetMessageId;
         setHighlightedMessageId(targetMessageId);
@@ -446,7 +436,7 @@ export default function ThreadScreen() {
         }, 3500);
 
         return () => clearTimeout(clearHighlightTimeout);
-    }, [hasOlderMessages, loadingInitialMessages, messages, targetMessageId]);
+    }, [hasOlderMessages, loadingInitialMessages, loadingOlderMessages, messages, targetMessageId]);
 
     useSpeechRecognitionEvent('result', (event) => {
         if (event.results && event.results.length > 0) {
@@ -614,16 +604,6 @@ export default function ThreadScreen() {
         let userMessagePersisted = false;
         let assistantMessagePersisted = false;
         let activeProvider: TurnProvider | undefined;
-
-        const syncInFlightTurn = (patch: Partial<InFlightTurnState>) => {
-            const current = inFlightTurnRef.current;
-            if (!current) return;
-            if (current.turnId !== turnId || current.threadId !== threadId) return;
-            inFlightTurnRef.current = {
-                ...current,
-                ...patch
-            };
-        };
         const refreshMessagesAfterMutation = async (
             stage: TurnStage,
             detail: string
@@ -646,35 +626,23 @@ export default function ThreadScreen() {
             }
         };
 
-        inFlightTurnRef.current = {
-            threadId,
-            turnId,
-            stage: TURN_STAGES.START,
-            provider: activeProvider,
-            startedAt: turnStartedAt
-        };
-        const stageTracker = createTurnStageTracker({
+        const turnController = createInFlightTurnController({
+            inFlightTurnRef,
             turnId,
             threadId,
+            startedAt: turnStartedAt,
             provider: activeProvider,
-            initialStage: TURN_STAGES.START,
-            onStateChange: ({ stage, provider }) => {
-                activeProvider = provider as TurnProvider | undefined;
-                syncInFlightTurn({
-                    stage,
-                    provider: activeProvider
-                });
-            }
+            initialStage: TURN_STAGES.START
         });
         const advanceStage = (next: TurnStage, detail?: string): TurnStage => {
-            return stageTracker.advance(next, detail);
+            return turnController.advance(next, detail);
         };
         const setTurnProvider = (provider?: TurnProvider): void => {
             activeProvider = provider;
-            stageTracker.setProvider(provider);
+            turnController.setProvider(provider);
         };
         const getTurnStage = (): TurnStage => {
-            return stageTracker.getStage();
+            return turnController.getStage();
         };
         const canApplyTurnState = (): boolean => isCurrentThreadActive(threadId);
         setInputText('');
@@ -838,12 +806,7 @@ export default function ThreadScreen() {
             }
         } finally {
             const isCurrentThread = canApplyTurnState();
-            if (
-                inFlightTurnRef.current?.turnId === turnId
-                && inFlightTurnRef.current?.threadId === threadId
-            ) {
-                inFlightTurnRef.current = null;
-            }
+            turnController.clearIfCurrent();
             if (isCurrentThread) {
                 setIsLoading(false);
             }
@@ -864,7 +827,7 @@ export default function ThreadScreen() {
     const toggleLanguage = useCallback(() => {
         setSpeechLang((prev) => {
             const next = prev === 'el-GR' ? 'en-US' : 'el-GR';
-            setMicStatus(next === 'el-GR' ? 'Voice language: Greek' : 'Voice language: English');
+            setMicStatus(next === 'el-GR' ? 'Mic language: Greek' : 'Mic language: English');
             return next;
         });
     }, []);
@@ -875,8 +838,9 @@ export default function ThreadScreen() {
             inFlightTurnRef.current,
             isLoading
         );
+        const canApplyRetryState = (): boolean => !!id && isCurrentThreadActive(id);
         if (blockedByInFlightTurn) {
-            if (id && isCurrentThreadActive(id)) {
+            if (canApplyRetryState()) {
                 setMicStatus('Assistant is still replying. Please wait…');
             }
             return;
@@ -885,19 +849,21 @@ export default function ThreadScreen() {
             return;
         }
         try {
-            setRetryingProvider(true);
-            setMicStatus('Retrying AI connection…');
-            setLlmInitError(null);
+            if (canApplyRetryState()) {
+                setRetryingProvider(true);
+                setMicStatus('Retrying AI connection…');
+                setLlmInitError(null);
+            }
             await LLMService.init();
-            if (!isMountedRef.current) return;
+            if (!canApplyRetryState()) return;
             setLlmReady(true);
             setMicStatus('AI ready');
         } catch (error) {
-            if (!isMountedRef.current) return;
+            if (!canApplyRetryState()) return;
             setLlmReady(false);
             setLlmInitError(toUserFacingProviderMessage(error));
         } finally {
-            if (isMountedRef.current) {
+            if (canApplyRetryState()) {
                 setRetryingProvider(false);
             }
         }
@@ -1152,7 +1118,7 @@ export default function ThreadScreen() {
                             ListEmptyComponent={(
                                 <Text style={styles.emptyText}>
                                     {historyLoadErrorSource === 'initial'
-                                        ? 'Conversation is unavailable right now. Use "Retry" above.'
+                                        ? 'Conversation is unavailable right now. Tap Retry above.'
                                         : 'No messages yet. Send a message to get started.'}
                                 </Text>
                             )}
@@ -1182,6 +1148,9 @@ export default function ThreadScreen() {
                     {retryingProvider && !isLoading && (
                         <Text style={styles.turnStatusText}>Reconnecting AI…</Text>
                     )}
+                    {providerUnavailable && !isLoading && !retryingProvider && (
+                        <Text style={styles.turnStatusText}>Sending is disabled until AI is available.</Text>
+                    )}
                     {micStatus !== 'Microphone ready' && (
                         <Text style={styles.micStatusText}>{micStatus}</Text>
                     )}
@@ -1192,7 +1161,7 @@ export default function ThreadScreen() {
                             onChangeText={setInputText}
                             placeholder={
                                 providerUnavailable
-                                    ? 'AI unavailable. Open Settings to fix provider/model setup'
+                                    ? 'AI unavailable. Open Settings to restore provider/model setup'
                                     : retryingProvider
                                     ? 'Retrying AI connection…'
                                     : isLoading
@@ -1345,6 +1314,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8
     },
     historyErrorText: {
+        flex: 1,
         color: Colors.notification,
         fontSize: 12
     },
@@ -1423,6 +1393,7 @@ const styles = StyleSheet.create({
     llmErrorActionsRow: {
         marginTop: 4,
         flexDirection: 'row',
+        flexWrap: 'wrap',
         gap: 14
     },
     turnStatusText: {

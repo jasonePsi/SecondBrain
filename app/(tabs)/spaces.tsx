@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
@@ -8,6 +8,8 @@ import { CaptureFAB } from '../../src/components/CaptureFAB';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function SpacesScreen() {
+  const isMountedRef = useRef(true);
+  const loadRequestRef = useRef(0);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,17 +18,33 @@ export default function SpacesScreen() {
   const [renameValue, setRenameValue] = useState('');
   const router = useRouter();
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const loadSpaces = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
+    const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
     try {
-      setLoading(true);
-      setError(null);
+      if (canApply()) {
+        setLoading(true);
+        setError(null);
+      }
       const data = await SpaceRepo.getAll();
+      if (!canApply()) return;
       setSpaces(data);
     } catch (err: any) {
       console.error('Failed to load spaces:', err);
-      setError('We could not load your spaces.');
+      if (canApply()) {
+        setError('Spaces are temporarily unavailable. Please try again.');
+      }
     } finally {
-      setLoading(false);
+      if (canApply()) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -158,10 +176,16 @@ export default function SpacesScreen() {
         <View style={styles.container}>
         <Stack.Screen options={{ title: 'Spaces' }} />
         <View style={styles.fullState}>
-          <Text style={styles.errorStateText}>We could not load your spaces.</Text>
-          <Text style={styles.errorStateSubtext}>Please try again. You can still create a new space.</Text>
+          <Text style={styles.errorStateText}>Spaces are temporarily unavailable.</Text>
+          <Text style={styles.errorStateSubtext}>Try again, or create a new space directly.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadSpaces}>
             <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.retryButton, styles.secondaryButton]}
+            onPress={() => router.push('/space/new')}
+          >
+            <Text style={[styles.retryButtonText, styles.secondaryButtonText]}>Create Space</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -376,6 +400,15 @@ const styles = StyleSheet.create({
   retryButtonText: {
     color: '#fff',
     fontWeight: '600'
+  },
+  secondaryButton: {
+    marginTop: 8,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border
+  },
+  secondaryButtonText: {
+    color: Colors.primary
   },
   modalOverlay: {
     flex: 1,

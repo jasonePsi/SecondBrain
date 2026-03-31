@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     ScrollView,
@@ -25,21 +25,39 @@ const formatTimestamp = (value: number | null | undefined): string => {
 
 export default function BrainScreen() {
     const router = useRouter();
+    const isMountedRef = useRef(true);
+    const loadRequestRef = useRef(0);
     const [snapshot, setSnapshot] = useState<BrainSnapshot | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
     const loadSnapshot = useCallback(async () => {
+        const requestId = ++loadRequestRef.current;
+        const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
         try {
-            setLoading(true);
-            setError(null);
+            if (canApply()) {
+                setLoading(true);
+                setError(null);
+            }
             const next = await BrainService.getSnapshot();
+            if (!canApply()) return;
             setSnapshot(next);
         } catch (err: any) {
             console.error('Brain refresh failed:', err);
-            setError('Memory is temporarily unavailable. Please try again.');
+            if (canApply()) {
+                setError('Memory is temporarily unavailable. Please try again.');
+            }
         } finally {
-            setLoading(false);
+            if (canApply()) {
+                setLoading(false);
+            }
         }
     }, []);
 

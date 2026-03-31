@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
@@ -12,6 +12,8 @@ import { Ionicons } from '@expo/vector-icons';
 export default function SpaceDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const isMountedRef = useRef(true);
+  const loadRequestRef = useRef(0);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,22 +23,42 @@ export default function SpaceDetailScreen() {
   const [isEditing, setIsEditing] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Thread | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [creatingThread, setCreatingThread] = useState(false);
+  const [savingRename, setSavingRename] = useState(false);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!id) return;
+    const requestId = ++loadRequestRef.current;
+    const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
     try {
-      setLoading(true);
-      setError(null);
+      if (canApply()) {
+        setLoading(true);
+        setError(null);
+      }
       const space = await SpaceRepo.get(id);
+      if (!canApply()) return;
       if (space) setSpaceName(space.name);
 
       const data = await ThreadRepo.listBySpace(id);
+      if (!canApply()) return;
       setThreads(data);
     } catch (err: any) {
       console.error('Failed to load space detail:', err);
-      setError('We could not load threads in this space.');
+      if (canApply()) {
+        setError('Threads are temporarily unavailable in this space.');
+      }
     } finally {
-      setLoading(false);
+      if (canApply()) {
+        setLoading(false);
+      }
     }
   }, [id]);
 
@@ -62,6 +84,7 @@ export default function SpaceDetailScreen() {
     const trimmed = newThreadName.trim();
     const title = trimmed || 'Untitled Thread';
     try {
+      setCreatingThread(true);
       const newId = await ThreadRepo.create(id, title);
       await FeedRepo.create(id, 'thread_created', newId);
       closeNewThread();
@@ -70,6 +93,8 @@ export default function SpaceDetailScreen() {
     } catch (error) {
       console.error('Create thread failed:', error);
       Alert.alert('Could Not Create Thread', 'Please try again.');
+    } finally {
+      setCreatingThread(false);
     }
   };
 
@@ -94,6 +119,7 @@ export default function SpaceDetailScreen() {
     if (!trimmed) return;
 
     try {
+      setSavingRename(true);
       await ThreadRepo.update(renameTarget.id, { title: trimmed });
       await FeedRepo.create(id || null, 'thread_updated', renameTarget.id);
       closeRename();
@@ -101,6 +127,8 @@ export default function SpaceDetailScreen() {
     } catch (error) {
       console.error('Rename failed:', error);
       Alert.alert('Error', 'Could not rename thread.');
+    } finally {
+      setSavingRename(false);
     }
   };
 
@@ -115,11 +143,14 @@ export default function SpaceDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              setDeletingThreadId(thread.id);
               await ThreadRepo.delete(thread.id);
               await loadData();
             } catch (error) {
               console.error('Delete failed:', error);
               Alert.alert('Error', 'Could not delete thread.');
+            } finally {
+              setDeletingThreadId(null);
             }
           }
         }
@@ -140,11 +171,27 @@ export default function SpaceDetailScreen() {
 
       {isEditing && (
         <View style={styles.itemActions}>
-          <TouchableOpacity style={styles.actionButton} onPress={() => openRename(item)}>
-            <Ionicons name="pencil" size={18} color={Colors.primary} />
+          <TouchableOpacity
+            style={[styles.actionButton, deletingThreadId === item.id && styles.actionDisabled]}
+            onPress={() => openRename(item)}
+            disabled={deletingThreadId === item.id}
+          >
+            <Ionicons
+              name="pencil"
+              size={18}
+              color={deletingThreadId === item.id ? Colors.secondaryText : Colors.primary}
+            />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton} onPress={() => handleDelete(item)}>
-            <Ionicons name="trash" size={18} color={Colors.notification} />
+          <TouchableOpacity
+            style={[styles.actionButton, deletingThreadId === item.id && styles.actionDisabled]}
+            onPress={() => handleDelete(item)}
+            disabled={deletingThreadId === item.id}
+          >
+            {deletingThreadId === item.id ? (
+              <ActivityIndicator size="small" color={Colors.notification} />
+            ) : (
+              <Ionicons name="trash" size={18} color={Colors.notification} />
+            )}
           </TouchableOpacity>
         </View>
       )}
@@ -156,10 +203,16 @@ export default function SpaceDetailScreen() {
       <View style={styles.container}>
         <Stack.Screen options={{ title: spaceName }} />
         <View style={styles.fullState}>
-          <Text style={styles.errorStateText}>We could not load threads in this space.</Text>
-          <Text style={styles.errorStateSubtext}>Please try again. You can still return to Spaces.</Text>
+          <Text style={styles.errorStateText}>Threads are temporarily unavailable.</Text>
+          <Text style={styles.errorStateSubtext}>Try again, or return to Spaces.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadData}>
             <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.retryButton, styles.secondaryButton]}
+            onPress={() => router.replace('/(tabs)/spaces')}
+          >
+            <Text style={[styles.retryButtonText, styles.secondaryButtonText]}>Go to Spaces</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -253,10 +306,13 @@ export default function SpaceDetailScreen() {
                   <Text style={styles.modalButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.modalPrimaryButton]}
+                  style={[styles.modalButton, styles.modalPrimaryButton, creatingThread && styles.modalPrimaryButtonDisabled]}
                   onPress={createThread}
+                  disabled={creatingThread}
                 >
-                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>Create</Text>
+                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>
+                    {creatingThread ? 'Creating…' : 'Create'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -289,11 +345,13 @@ export default function SpaceDetailScreen() {
                   <Text style={styles.modalButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.modalPrimaryButton]}
+                  style={[styles.modalButton, styles.modalPrimaryButton, (!renameValue.trim() || savingRename) && styles.modalPrimaryButtonDisabled]}
                   onPress={saveRename}
-                  disabled={!renameValue.trim()}
+                  disabled={!renameValue.trim() || savingRename}
                 >
-                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>Save</Text>
+                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>
+                    {savingRename ? 'Saving…' : 'Save'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -406,6 +464,15 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600'
   },
+  secondaryButton: {
+    marginTop: 8,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border
+  },
+  secondaryButtonText: {
+    color: Colors.primary
+  },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -421,6 +488,9 @@ const styles = StyleSheet.create({
   actionButton: {
     paddingHorizontal: 6,
     paddingVertical: 6
+  },
+  actionDisabled: {
+    opacity: 0.5
   },
   modalOverlay: {
     flex: 1,
@@ -471,6 +541,9 @@ const styles = StyleSheet.create({
   modalPrimaryButton: {
     backgroundColor: Colors.primary,
     borderRadius: 8
+  },
+  modalPrimaryButtonDisabled: {
+    opacity: 0.55
   },
   modalPrimaryText: {
     color: 'white',
