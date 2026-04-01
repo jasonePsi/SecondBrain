@@ -45,6 +45,7 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
+    "@xmldom/xmldom": "^0.8.12",
     "ajv": "^8.18.0",
     "brace-expansion@2.0.2": "2.0.3",
     "node-forge": "^1.4.0",

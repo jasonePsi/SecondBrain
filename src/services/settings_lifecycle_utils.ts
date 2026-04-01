@@ -47,6 +47,57 @@ const normalizeString = (value: unknown): string => {
     return value.trim();
 };
 
+type InstalledModelInventoryModel = {
+    model_id: string;
+    size_bytes: number;
+};
+
+export const deriveInstalledModelInventory = <T extends InstalledModelInventoryModel>(input: {
+    installedModels: T[];
+    usableInstalledModelIds: Set<string>;
+}): {
+    usableInstalledModels: T[];
+    missingModelCount: number;
+    totalStorageUsed: number;
+    hasModelRecord: (modelId: string) => boolean;
+    isModelInstalled: (modelId: string) => boolean;
+} => {
+    const installedModels = Array.isArray(input.installedModels) ? input.installedModels : [];
+    const usableInstalledModelIds = input.usableInstalledModelIds || new Set<string>();
+    const installedModelIdSet = new Set<string>();
+    const usableModelIdSet = new Set<string>();
+    const usableInstalledModels: T[] = [];
+    let totalStorageUsed = 0;
+
+    for (const model of installedModels) {
+        const modelId = normalizeString(model?.model_id);
+        if (!modelId) continue;
+        installedModelIdSet.add(modelId);
+        if (!usableInstalledModelIds.has(modelId)) continue;
+        usableModelIdSet.add(modelId);
+        usableInstalledModels.push(model);
+        if (typeof model.size_bytes === 'number' && Number.isFinite(model.size_bytes) && model.size_bytes > 0) {
+            totalStorageUsed += model.size_bytes;
+        }
+    }
+
+    return {
+        usableInstalledModels,
+        missingModelCount: Math.max(0, installedModels.length - usableInstalledModels.length),
+        totalStorageUsed,
+        hasModelRecord: (modelId: string) => installedModelIdSet.has(normalizeString(modelId)),
+        isModelInstalled: (modelId: string) => usableModelIdSet.has(normalizeString(modelId))
+    };
+};
+
+export const getMissingModelWarningMessage = (
+    missingModelCount: number
+): string | null => {
+    const normalizedMissingCount = normalizeCount(missingModelCount);
+    if (normalizedMissingCount <= 0) return null;
+    return `${normalizedMissingCount} model ${normalizedMissingCount === 1 ? 'entry needs' : 'entries need'} reinstall (missing file).`;
+};
+
 export const getProviderBadgeLabel = (
     input: ProviderBadgeInput
 ): string => {

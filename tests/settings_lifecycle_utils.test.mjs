@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canAutoRepairLocalProviderSwitch,
+  deriveInstalledModelInventory,
   deriveSettingsProviderFeedback,
   getDeleteModelSuccessMessage,
+  getMissingModelWarningMessage,
   getProviderBadgeLabel,
   getProviderSwitchState,
   getLocalModelSummary,
@@ -593,5 +595,41 @@ test('getDeleteModelSuccessMessage keeps delete-active-model outcomes determinis
       fallbackActiveModelName: null
     }),
     'Model removed from this device.'
+  );
+});
+
+test('deriveInstalledModelInventory keeps deterministic storage/count/membership signals', () => {
+  const inventory = deriveInstalledModelInventory({
+    installedModels: [
+      { model_id: 'm1', size_bytes: 100 },
+      { model_id: 'm2', size_bytes: 200 },
+      { model_id: 'm3', size_bytes: Number.NaN },
+      { model_id: '   ', size_bytes: 999 }
+    ],
+    usableInstalledModelIds: new Set(['m1', 'm3'])
+  });
+
+  assert.deepEqual(
+    inventory.usableInstalledModels.map((model) => model.model_id),
+    ['m1', 'm3']
+  );
+  assert.equal(inventory.totalStorageUsed, 100);
+  assert.equal(inventory.missingModelCount, 2);
+  assert.equal(inventory.hasModelRecord('m2'), true);
+  assert.equal(inventory.hasModelRecord('missing'), false);
+  assert.equal(inventory.isModelInstalled('m1'), true);
+  assert.equal(inventory.isModelInstalled('m2'), false);
+});
+
+test('getMissingModelWarningMessage returns warning copy only when entries are missing', () => {
+  assert.equal(getMissingModelWarningMessage(0), null);
+  assert.equal(getMissingModelWarningMessage(-3), null);
+  assert.equal(
+    getMissingModelWarningMessage(1),
+    '1 model entry needs reinstall (missing file).'
+  );
+  assert.equal(
+    getMissingModelWarningMessage(2),
+    '2 model entries need reinstall (missing file).'
   );
 });

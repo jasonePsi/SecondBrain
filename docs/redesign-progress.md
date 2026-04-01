@@ -1,7 +1,224 @@
 # Redesign Progress
 
 Last updated: April 1, 2026
-Current phase: Release-candidate hardening complete
+Current phase: QA handoff and release-gate documentation pass complete
+
+## Phase 8 - QA Handoff and Release-Gate Documentation (April 1, 2026)
+
+### Goals completed
+
+- Rewrote `docs/manual-qa-checklist.md` into a structured manual/device QA runbook with:
+  - explicit scenario IDs
+  - risk priority labels (`P0`/`P1`/`P2`)
+  - per-scenario steps, expected results, and failure criteria
+  - startup/provider/thread/search/knowledge/accessibility coverage.
+- Added `docs/release-candidate-checklist.md` to separate:
+  - automated gate (`npm run verify:all`)
+  - Gate A (`P0` scenarios)
+  - Gate B (`P0 + P1` scenarios)
+  - deferred-risk signoff requirements.
+- Updated release-facing docs (`README`, architecture overview, cloud setup doc) so QA handoff and release-gate expectations are explicit and consistent.
+- Kept this phase strictly documentation/release-prep focused; no product redesign/runtime behavior changes.
+
+### What is already validated vs still runtime-dependent
+
+Validated by code/tests:
+
+- root + proxy automated gate via `npm run verify:all`
+- deterministic helper/service coverage across turn lifecycle, history/jump, provider/lifecycle mapping, post-processing degrade behavior, and proxy smoke behavior.
+
+Still requiring real runtime/device verification:
+
+- speech input behavior across iOS/Android permissions and failure paths
+- provider switching and startup-route truthfulness under real network/proxy conditions
+- long-thread history loading and search-to-thread jump/highlight behavior in live runtime
+- accessibility quality checks (VoiceOver, Dynamic Type, Reduced Motion, dark-mode readability).
+
+### Major design/engineering decisions
+
+- Keep release-prep docs truthful and operational, not optimistic.
+- Make QA execution reproducible for a new tester with no prior project context.
+- Keep `verify:all` as the practical automated release gate; add manual gate documentation rather than changing CI.
+
+### Changed files
+
+- `docs/manual-qa-checklist.md`
+- `docs/release-candidate-checklist.md` (new)
+- `README.md`
+- `docs/architecture-overview.md`
+- `docs/cloud-provider-setup.md`
+- `docs/redesign-progress.md`
+
+### Validation
+
+Commands run:
+
+- `npm run verify:all`
+
+Results:
+
+- release gate remains green (`verify:all`)
+- app deterministic tests pass
+- proxy verify/smoke tests pass
+- install-time transitive deprecation warnings remain visible and tracked in `docs/dependency-risk.md` (unchanged in this phase)
+
+### Manual QA in this environment
+
+- Runtime simulator/device QA was not feasible in this CLI environment.
+- This phase intentionally prepared the runbook/checklists for human-run manual QA; no runtime QA claims are made here.
+
+### Known issues / remaining risks
+
+- Manual/device QA execution is still outstanding; release confidence remains blocked on Gate A and Gate B completion by a human tester.
+- Thread and Settings remain the largest runtime-risk surfaces despite improved maintainability.
+- Transitive deprecation warnings remain accepted release-branch debt and are documented in `docs/dependency-risk.md`.
+
+### Notes next phase must respect
+
+- Treat `docs/manual-qa-checklist.md` as the canonical runtime QA runbook.
+- Use `docs/release-candidate-checklist.md` for formal Gate A / Gate B signoff.
+- Keep docs truthful about what is and is not runtime-validated.
+- Preserve `npm run verify:all` as automated release gate.
+
+## Phase 7 - Final Thread + Settings Maintainability Pass (April 1, 2026)
+
+### Goals completed
+
+- Audited remaining density in `app/thread/[id].tsx` and `app/(tabs)/settings.tsx` and targeted only deterministic, low-risk cleanup points.
+- Added `resolveThreadInteractionState` in `thread_ui_state_utils` to centralize Thread interaction gating and UI-state derivation for:
+  - provider unavailable state
+  - send disablement
+  - retry disablement
+  - load-older blocking
+  - composer placeholder + status labels.
+- Updated `app/thread/[id].tsx` to consume the centralized Thread interaction state, removing duplicated local gating expressions while preserving behavior.
+- Added `deriveInstalledModelInventory` + `getMissingModelWarningMessage` in `settings_lifecycle_utils` to centralize Settings model inventory derivation and missing-file warning copy.
+- Updated `app/(tabs)/settings.tsx` to consume centralized model inventory derivation and removed unused local state (`missingInstalledModelIds`), reducing render-time lifecycle duplication.
+- Added deterministic tests for the new helper logic to keep this cleanup regression-safe.
+
+### Major design/engineering decisions
+
+- Keep this pass narrowly focused on maintainability and state clarity, not visible redesign.
+- Prefer pure helper extraction + wiring over orchestration rewrites in runtime-heavy screens.
+- Preserve existing lifecycle/runtime behavior exactly and verify with release-gate commands.
+
+### Changed files
+
+- `app/thread/[id].tsx`
+- `app/(tabs)/settings.tsx`
+- `src/services/thread_ui_state_utils.ts`
+- `src/services/settings_lifecycle_utils.ts`
+- `tests/thread_ui_state_utils.test.mjs`
+- `tests/settings_lifecycle_utils.test.mjs`
+- `docs/redesign-progress.md`
+
+### Validation
+
+Commands run:
+
+- `npm run typecheck`
+- `npm test -- tests/thread_ui_state_utils.test.mjs tests/settings_lifecycle_utils.test.mjs`
+- `npm run verify:all`
+
+Results:
+
+- typecheck passes
+- deterministic suite passes (`209` tests)
+- proxy verify/smoke passes (`23` tests)
+- release gate remains green (`verify:all`)
+
+### Manual QA in this environment
+
+- Runtime simulator/device QA was not feasible in this CLI environment.
+- Deferred human verification checklist for touched flows:
+  - Thread: send, retry AI, provider failure banner, load older messages, rename thread
+  - Thread deep-link: open from Search and verify jump/highlight behavior
+  - Settings: provider switch, install/activate/delete/fallback/missing-file flows
+
+### Known issues / remaining risks
+
+- Thread and Settings are now cleaner in deterministic UI-state derivation, but they remain the highest runtime-risk screens and still require device-level QA.
+- Speech input behavior and provider-switch timing should be verified on physical devices/simulators due platform/runtime variability.
+- Existing transitive dependency deprecation warnings remain tracked in `docs/dependency-risk.md` (unchanged in this phase).
+
+### Notes next phase must respect
+
+- Keep `thread_ui_state_utils` and `settings_lifecycle_utils` as the source of truth for newly centralized UI-state derivations.
+- Avoid reintroducing duplicated gating/copy logic directly in `app/thread/[id].tsx` and `app/(tabs)/settings.tsx`.
+- Preserve `npm run verify:all` as the release gate.
+
+## Phase 6 - Dependency and Documentation Truthfulness (April 1, 2026)
+
+### Goals completed
+
+- Audited real dependency risk for both root app and backend proxy with registry-backed audits and install-time deprecation checks.
+- Traced the root high-severity advisory chain concretely (`@xmldom/xmldom@0.8.11` via Expo dependency tree).
+- Applied a low-risk, contained fix:
+  - root `overrides` now pins `@xmldom/xmldom` to `^0.8.12`
+  - lockfile updated to `@xmldom/xmldom@0.8.12`
+  - root full and runtime-only audits now both report `0` advisories.
+- Added explicit dependency-risk documentation with evidence, classification, and deferred-item rationale.
+- Updated README dependency section to match current reality and link to the detailed risk snapshot.
+
+### Major design/engineering decisions
+
+- Keep dependency hardening targeted and low risk (override + lock update), avoiding broad framework/toolchain churn.
+- Keep `verify:all` as release gate and do not change CI shape in this phase because it already mirrors intended validation.
+- Treat remaining deprecation warnings as tracked ecosystem constraints, not silent debt.
+
+### Changed files
+
+- `package.json`
+- `package-lock.json`
+- `README.md`
+- `docs/architecture-overview.md`
+- `docs/dependency-risk.md` (new)
+- `docs/redesign-progress.md`
+
+### Validation
+
+Commands run:
+
+- `npm ci`
+- `npm audit --json`
+- `npm audit --omit=dev --json`
+- `npm --prefix backend-proxy ci`
+- `npm --prefix backend-proxy audit --json`
+- `npm --prefix backend-proxy audit --omit=dev --json`
+- `npm run verify`
+- `npm run test:proxy`
+- `npm run verify:all`
+
+Results:
+
+- root audits: `0` advisories (full + runtime-only)
+- proxy audits: `0` advisories (full + runtime-only)
+- root install still emits known transitive deprecations (`inflight`, `rimraf@3`, `glob@7`)
+- proxy install still emits known transitive deprecation (`node-domexception`)
+- all validation gates pass (`verify`, `test:proxy`, `verify:all`)
+- note: proxy smoke tests require local loopback bind permissions in this environment; non-escalated runs may fail with sandbox `EPERM` on `127.0.0.1`.
+
+### Manual QA in this environment
+
+- This phase touched dependency metadata and documentation only (no runtime/product surface changes).
+- Runtime simulator/device QA was not feasible in this CLI environment.
+- Conceptual/manual checks completed:
+  - confirmed no product-surface code paths were changed as part of dependency/doc updates
+  - confirmed release-gate commands still pass after dependency override change.
+- Human runtime QA still required before release for previously deferred Thread/Settings/on-device flows (unchanged from prior phases).
+
+### Known issues / remaining risks
+
+- Install-time deprecation warnings remain transitive:
+  - root: `inflight@1.0.6`, `rimraf@3.0.2`, `glob@7.2.3`
+  - proxy: `node-domexception@1.0.0`
+- These are currently ecosystem-pinned enough to defer in release branch; see `docs/dependency-risk.md` for exact chains and upgrade path.
+
+### Notes next phase must respect
+
+- Keep dependency updates release-safe and targeted; avoid broad `npm audit fix` churn in this branch.
+- Preserve `verify:all` as practical release gate.
+- Use `docs/dependency-risk.md` as the dependency/deprecation source of truth and update it whenever risk posture changes.
 
 ## Phase 5 - Release-Candidate Hardening (April 1, 2026)
 

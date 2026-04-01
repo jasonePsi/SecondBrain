@@ -43,8 +43,7 @@ import {
     shouldLoadOlderHistory
 } from '../../src/services/thread_history_utils';
 import {
-    resolveThreadComposerPlaceholder,
-    resolveThreadStatusText
+    resolveThreadInteractionState
 } from '../../src/services/thread_ui_state_utils';
 import { toUserFacingProviderMessage } from '../../src/services/provider_status_copy_utils';
 import { debugLog } from '../../src/services/runtime_log';
@@ -171,28 +170,29 @@ export default function ThreadScreen() {
     const [savingRename, setSavingRename] = useState(false);
     const theme = useAppTheme();
     const reducedMotion = useReducedMotion();
-    const providerUnavailable = !!llmInitError && !llmReady && !retryingProvider;
-    const interactionDisabled = isLoading || retryingProvider;
-    const providerRetryDisabled = retryingProvider || shouldBlockProviderRetryForThread(
-        id,
-        inFlightTurnRef.current,
-        isLoading
-    );
-    const turnStatusText = resolveThreadStatusText({
+    const threadInteractionState = resolveThreadInteractionState({
+        threadId: id,
+        inFlightTurn: inFlightTurnRef.current,
+        llmInitError,
+        llmReady,
+        retryingProvider,
         isLoading,
+        inputText,
+        isRecording,
+        micStatus,
         activeTurnStage,
-        activeTurnProvider,
-        retryingProvider,
-        providerUnavailable
+        activeTurnProvider
     });
-    const micStatusText = micStatus !== 'Microphone ready' ? micStatus : null;
-    const composerPlaceholder = resolveThreadComposerPlaceholder({
+    const {
         providerUnavailable,
-        retryingProvider,
-        isLoading,
-        isRecording
-    });
-    const sendDisabled = providerUnavailable || inputText.trim().length === 0 || interactionDisabled;
+        interactionDisabled,
+        providerRetryDisabled,
+        sendDisabled,
+        blockOlderLoad,
+        turnStatusText,
+        micStatusText,
+        composerPlaceholder
+    } = threadInteractionState;
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -1136,12 +1136,6 @@ export default function ThreadScreen() {
     }, [historyLoadErrorSource, loadInitialMessages, loadOlderMessages, reducedMotion]);
 
     const renderListHeader = () => {
-        const blockOlderLoad = shouldBlockSendForThread(
-            id,
-            inFlightTurnRef.current,
-            isLoading
-        ) || retryingProvider;
-
         return (
             <ThreadHistoryHeader
                 jumpHint={jumpHint}

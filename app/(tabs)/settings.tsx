@@ -17,9 +17,11 @@ import type { AIProviderStatus, AIProviderType } from '../../src/services/LLMSer
 import { ModelManager } from '../../src/services/ModelManager';
 import { formatProviderStatusReason } from '../../src/services/provider_status_copy_utils';
 import {
+    deriveInstalledModelInventory,
     getDeleteModelSuccessMessage,
     canAutoRepairLocalProviderSwitch,
     deriveSettingsProviderFeedback,
+    getMissingModelWarningMessage,
     getProviderBadgeLabel,
     getLocalModelSummary,
     getProviderSwitchState,
@@ -97,7 +99,6 @@ export default function SettingsScreen() {
     const [activeModel, setActiveModel] = useState<ModelSetting | null>(null);
     const [installedModels, setInstalledModels] = useState<ModelSetting[]>([]);
     const [usableInstalledModelIds, setUsableInstalledModelIds] = useState<Set<string>>(new Set());
-    const [missingInstalledModelIds, setMissingInstalledModelIds] = useState<Set<string>>(new Set());
     const [activeModelMissing, setActiveModelMissing] = useState(false);
     const [availableModels, setAvailableModels] = useState<ModelConfig[]>([]);
     const [downloading, setDownloading] = useState<string | null>(null);
@@ -169,7 +170,6 @@ export default function SettingsScreen() {
             setActiveModel(active);
             setInstalledModels(installed);
             setUsableInstalledModelIds(usableIds);
-            setMissingInstalledModelIds(missingIds);
             setActiveModelMissing(activeMissing);
             setAvailableModels(getAllModels());
 
@@ -379,20 +379,17 @@ export default function SettingsScreen() {
         );
     };
 
-    const hasModelRecord = (modelId: string): boolean => {
-        return installedModels.some((model) => model.model_id === modelId);
-    };
-
-    const isModelInstalled = (modelId: string): boolean => {
-        return usableInstalledModelIds.has(modelId);
-    };
-
     const selectedProviderStatus = getProviderStatus(activeProvider);
     const localProviderStatus = getProviderStatus('local');
     const cloudProviderStatus = getProviderStatus('cloud');
-    const usableInstalledModels = installedModels.filter((model) => usableInstalledModelIds.has(model.model_id));
-    const missingModelCount = installedModels.length - usableInstalledModels.length;
-    const totalStorageUsed = usableInstalledModels.reduce((total, model) => total + model.size_bytes, 0);
+    const installedModelInventory = deriveInstalledModelInventory({
+        installedModels,
+        usableInstalledModelIds
+    });
+    const usableInstalledModels = installedModelInventory.usableInstalledModels;
+    const missingModelCount = installedModelInventory.missingModelCount;
+    const missingModelWarningMessage = getMissingModelWarningMessage(missingModelCount);
+    const totalStorageUsed = installedModelInventory.totalStorageUsed;
     const activeModelName = activeModel
         ? (getModelById(activeModel.model_id)?.name || activeModel.model_id)
         : null;
@@ -558,17 +555,17 @@ export default function SettingsScreen() {
                         <Text style={[styles.storageText, { color: theme.colors.text.secondary }]}>
                             Storage used: {formatBytes(totalStorageUsed)}
                         </Text>
-                        {missingModelCount > 0 && (
+                        {!!missingModelWarningMessage && (
                             <InlineBanner
                                 tone="warning"
-                                message={`${missingModelCount} model ${missingModelCount === 1 ? 'entry needs' : 'entries need'} reinstall (missing file).`}
+                                message={missingModelWarningMessage}
                             />
                         )}
                     </GroupedSection>
 
                     {availableModels.map((model) => {
-                        const hasRecord = hasModelRecord(model.id);
-                        const installed = isModelInstalled(model.id);
+                        const hasRecord = installedModelInventory.hasModelRecord(model.id);
+                        const installed = installedModelInventory.isModelInstalled(model.id);
                         const status = getSettingsModelStatus({
                             modelId: model.id,
                             activeModelId: activeModel?.model_id,

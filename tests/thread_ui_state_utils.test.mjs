@@ -4,6 +4,7 @@ import { TURN_STAGES } from '../src/services/assistant_turn_utils.ts';
 import {
   getTurnStageStatusText,
   resolveHistoryLoadActionLabel,
+  resolveThreadInteractionState,
   resolveJumpHintAction,
   resolveThreadComposerPlaceholder,
   resolveThreadStatusText
@@ -209,6 +210,88 @@ test('resolveJumpHintAction returns deterministic load vs dismiss actions', () =
       label: 'Dismiss',
       disabled: false,
       loading: false
+    }
+  );
+});
+
+test('resolveThreadInteractionState keeps Thread gating and UI text deterministic', () => {
+  assert.deepEqual(
+    resolveThreadInteractionState({
+      threadId: 'thread-1',
+      inFlightTurn: { threadId: 'thread-1', turnId: 'turn-1' },
+      llmInitError: null,
+      llmReady: true,
+      retryingProvider: false,
+      isLoading: false,
+      inputText: 'hello',
+      isRecording: false,
+      micStatus: 'Microphone ready',
+      activeTurnStage: TURN_STAGES.GENERATE_ASSISTANT_REPLY,
+      activeTurnProvider: 'cloud'
+    }),
+    {
+      providerUnavailable: false,
+      interactionDisabled: false,
+      providerRetryDisabled: true,
+      sendDisabled: false,
+      blockOlderLoad: true,
+      turnStatusText: null,
+      micStatusText: null,
+      composerPlaceholder: 'Type a message or use the mic'
+    }
+  );
+});
+
+test('resolveThreadInteractionState preserves unavailable/retrying messaging and disabled controls', () => {
+  assert.deepEqual(
+    resolveThreadInteractionState({
+      threadId: 'thread-2',
+      inFlightTurn: null,
+      llmInitError: 'Cloud proxy unreachable',
+      llmReady: false,
+      retryingProvider: false,
+      isLoading: false,
+      inputText: '   ',
+      isRecording: true,
+      micStatus: 'Listening…',
+      activeTurnStage: null,
+      activeTurnProvider: null
+    }),
+    {
+      providerUnavailable: true,
+      interactionDisabled: false,
+      providerRetryDisabled: false,
+      sendDisabled: true,
+      blockOlderLoad: false,
+      turnStatusText: 'Sending is disabled until AI is available.',
+      micStatusText: 'Listening…',
+      composerPlaceholder: 'AI unavailable. Open Settings to restore provider/model setup'
+    }
+  );
+
+  assert.deepEqual(
+    resolveThreadInteractionState({
+      threadId: 'thread-2',
+      inFlightTurn: null,
+      llmInitError: null,
+      llmReady: false,
+      retryingProvider: true,
+      isLoading: false,
+      inputText: 'reply',
+      isRecording: false,
+      micStatus: 'Retrying AI connection…',
+      activeTurnStage: null,
+      activeTurnProvider: null
+    }),
+    {
+      providerUnavailable: false,
+      interactionDisabled: true,
+      providerRetryDisabled: true,
+      sendDisabled: true,
+      blockOlderLoad: true,
+      turnStatusText: 'Reconnecting AI…',
+      micStatusText: 'Retrying AI connection…',
+      composerPlaceholder: 'Retrying AI connection…'
     }
   );
 });

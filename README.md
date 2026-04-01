@@ -60,6 +60,22 @@ Notes:
   - app: `SECOND_BRAIN_DEBUG_LOGS=1` (or `EXPO_PUBLIC_DEBUG_LOGS=1`)
   - proxy: `OPENAI_PROXY_DEBUG_LOGS=true`
 
+## Manual Device QA Handoff
+
+Automated checks are necessary but not sufficient for release readiness.
+
+Use both docs below for manual/device signoff:
+
+- runbook with scenario steps + expected/failure criteria: `docs/manual-qa-checklist.md`
+- release signoff checklist (Gate A / Gate B): `docs/release-candidate-checklist.md`
+
+Release-candidate decision rule:
+
+1. `npm run verify:all` passes.
+2. All `P0` scenarios pass (first serious QA pass).
+3. All `P0` + `P1` scenarios pass (beta/release-candidate signoff).
+4. Deferred risks are reviewed and explicitly accepted (`docs/dependency-risk.md`, `docs/redesign-progress.md`).
+
 ## Redesign Status
 
 - Product/design direction: `docs/redesign-plan.md`
@@ -109,11 +125,12 @@ Risky changes to defer:
 - broad `npm audit fix` churn across Expo/Metro/CLI transitive trees without a full SDK upgrade plan
 - upgrades that force Expo SDK, React Native, or major tooling shifts
 
-Current triage status (March 31, 2026):
+Current triage status (April 1, 2026):
 
-- `backend-proxy`: 0 known advisories after targeted `overrides` (`path-to-regexp`)
-- root app: 0 known advisories in both full and runtime-only audit.
+- `backend-proxy`: 0 known advisories in both full and runtime-only audit.
+- root app: 0 known advisories in both full and runtime-only audit after applying a low-risk override for `@xmldom/xmldom` (from `0.8.11` -> `0.8.12`) to address `GHSA-wh4c-j3r5-mjhp`.
 - root lockfile now applies low-risk same-major overrides to reduce risk without SDK churn:
+  - `@xmldom/xmldom` -> `^0.8.12`
   - `ajv` -> `^8.18.0`
   - `brace-expansion@2.0.2` -> `2.0.3` (scoped override)
   - `node-forge` -> `^1.4.0`
@@ -140,6 +157,8 @@ Planned future path:
 Deprecation warning note:
 
 - these warnings are currently accepted for the release branch because they are transitive ecosystem constraints; do not force major framework upgrades just to silence install output.
+
+Detailed evidence (commands, dependency chains, and deferred items) is tracked in `docs/dependency-risk.md`.
 
 ## Backend Proxy Setup
 

@@ -130,12 +130,15 @@ App-side:
 - `npm test`
 - `npm run verify`
 - `npm run verify:all` (release gate: app checks + proxy verify)
+- manual/device QA runbook: `docs/manual-qa-checklist.md` (required for runtime confidence)
+- release signoff checklist: `docs/release-candidate-checklist.md`
 
 Proxy-side:
 
 - `npm --prefix backend-proxy run verify` (syntax + smoke tests)
 - smoke tests cover health/config parity, invalid payload/JSON shaping, request-id propagation, and privacy defaults/overrides across chat + extract
 - dependency risk is triaged per subproject (`npm audit` at root and `npm --prefix backend-proxy audit`), with targeted patch fixes preferred over broad toolchain churn during a release cycle
+- current dependency/deprecation snapshot and deferred upgrade rationale are tracked in `docs/dependency-risk.md`
 
 ## Feed and Brain Product Surfaces
 

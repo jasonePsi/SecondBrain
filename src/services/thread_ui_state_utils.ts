@@ -1,7 +1,17 @@
-import { TURN_STAGES, type TurnStage } from './assistant_turn_utils.ts';
+import {
+    shouldBlockProviderRetryForThread,
+    shouldBlockSendForThread,
+    TURN_STAGES,
+    type TurnStage
+} from './assistant_turn_utils.ts';
 
 export type ThreadTurnProvider = 'local' | 'cloud';
 export type ThreadJumpHintKind = 'found' | 'older' | 'missing';
+
+interface InFlightTurnLike {
+    threadId: string;
+    turnId: string;
+}
 
 interface ThreadStatusTextInput {
     isLoading: boolean;
@@ -29,6 +39,31 @@ interface JumpHintActionInput {
     hasOlderMessages: boolean;
     loadingOlderMessages: boolean;
     blockOlderLoad: boolean;
+}
+
+interface ThreadInteractionStateInput {
+    threadId: string | null | undefined;
+    inFlightTurn: InFlightTurnLike | null;
+    llmInitError: string | null;
+    llmReady: boolean;
+    retryingProvider: boolean;
+    isLoading: boolean;
+    inputText: string;
+    isRecording: boolean;
+    micStatus: string;
+    activeTurnStage: TurnStage | null;
+    activeTurnProvider: ThreadTurnProvider | null;
+}
+
+interface ThreadInteractionState {
+    providerUnavailable: boolean;
+    interactionDisabled: boolean;
+    providerRetryDisabled: boolean;
+    sendDisabled: boolean;
+    blockOlderLoad: boolean;
+    turnStatusText: string | null;
+    micStatusText: string | null;
+    composerPlaceholder: string;
 }
 
 export const getTurnStageStatusText = (
@@ -129,5 +164,49 @@ export const resolveJumpHintAction = (
         label: 'Dismiss',
         disabled: false,
         loading: false
+    };
+};
+
+export const resolveThreadInteractionState = (
+    input: ThreadInteractionStateInput
+): ThreadInteractionState => {
+    const providerUnavailable = !!input.llmInitError && !input.llmReady && !input.retryingProvider;
+    const interactionDisabled = input.isLoading || input.retryingProvider;
+    const turnInFlight = shouldBlockSendForThread(
+        input.threadId,
+        input.inFlightTurn,
+        input.isLoading
+    );
+    const providerRetryDisabled = input.retryingProvider || shouldBlockProviderRetryForThread(
+        input.threadId,
+        input.inFlightTurn,
+        input.isLoading
+    );
+    const blockOlderLoad = turnInFlight || input.retryingProvider;
+    const sendDisabled = providerUnavailable || input.inputText.trim().length === 0 || interactionDisabled;
+    const turnStatusText = resolveThreadStatusText({
+        isLoading: input.isLoading,
+        activeTurnStage: input.activeTurnStage,
+        activeTurnProvider: input.activeTurnProvider,
+        retryingProvider: input.retryingProvider,
+        providerUnavailable
+    });
+    const micStatusText = input.micStatus !== 'Microphone ready' ? input.micStatus : null;
+    const composerPlaceholder = resolveThreadComposerPlaceholder({
+        providerUnavailable,
+        retryingProvider: input.retryingProvider,
+        isLoading: input.isLoading,
+        isRecording: input.isRecording
+    });
+
+    return {
+        providerUnavailable,
+        interactionDisabled,
+        providerRetryDisabled,
+        sendDisabled,
+        blockOlderLoad,
+        turnStatusText,
+        micStatusText,
+        composerPlaceholder
     };
 };

@@ -116,3 +116,12 @@ This includes syntax + smoke coverage for:
 - per-request privacy override handling (chat + extract)
 
 At startup, the proxy validates config values (port/timeout/models) and fails fast on invalid settings.
+
+## QA handoff notes
+
+For release QA, use `docs/manual-qa-checklist.md` and run:
+
+- `CP-01` / `CP-02` / `CP-03` (cloud health, unavailable truthfulness, diagnostics/privacy safety)
+- `ST-02` (startup route when cloud is selected but unavailable)
+
+Use `docs/release-candidate-checklist.md` to record pass/fail signoff for Gate A and Gate B.
