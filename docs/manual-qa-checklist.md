@@ -136,6 +136,7 @@
 7. In Spaces edit mode, rename/delete controls should show in-flight state (saving/spinner) and avoid duplicate actions.
 8. Motion and haptics:
    - with default settings, button presses and list updates feel subtle (no flashy transitions).
+   - icon-only header actions (refresh/edit/options) provide a light feedback cue and remain easy to tap.
    - thread jump-from-search shows a short, clear highlight cue.
    - haptic feedback appears on send success, reminder completion/cancel, and provider retry outcomes.
 9. Reduced Motion:
@@ -144,4 +145,5 @@
 10. Accessibility:
    - icon-only buttons have meaningful VoiceOver labels/hints.
    - primary controls keep comfortable tap targets.
+   - status chips and inline banners are understandable via VoiceOver without relying on color.
    - warning/error copy is understandable without relying on color alone.

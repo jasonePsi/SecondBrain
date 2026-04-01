@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useRouter, Stack } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +13,7 @@ import {
     ErrorStateView,
     GroupedSection,
     InlineBanner,
+    ListRow,
     LoadingStateView,
     ScreenScaffold,
     SectionHeader,
@@ -101,7 +102,7 @@ export default function FeedScreen() {
         } catch (err: any) {
             console.error('Feed refresh failed:', err);
             if (canApply()) {
-                setError('Activity is temporarily unavailable. Please try again.');
+                setError('Activity feed is temporarily unavailable. Please try again.');
             }
         } finally {
             if (canApply()) {
@@ -109,6 +110,11 @@ export default function FeedScreen() {
             }
         }
     }, []);
+
+    const handleManualRefresh = useCallback(() => {
+        triggerHaptic('selection', reducedMotion);
+        loadFeed();
+    }, [loadFeed, reducedMotion]);
 
     useFocusEffect(
         useCallback(() => {
@@ -135,7 +141,7 @@ export default function FeedScreen() {
         } catch (err: any) {
             console.error('Action update failed:', err);
             triggerHaptic('error', reducedMotion);
-            Alert.alert('Update Failed', 'Could not update this reminder right now. Please try again.');
+            Alert.alert('Update Unavailable', 'Could not update this reminder right now. Please try again.');
         } finally {
             setUpdatingActionId(null);
         }
@@ -145,64 +151,40 @@ export default function FeedScreen() {
         const isActionUpdating = !!item.actionId && updatingActionId === item.actionId;
         const actionStatus = toActionStatusLabel(item.actionStatus);
         const typeLabel = getTypeLabel(item.feedType);
+        const metaParts = [item.scopeLabel, formatTimestamp(item.createdAt)].filter(Boolean);
 
         return (
             <GroupedSection style={styles.feedCard}>
-                <TouchableOpacity
-                    onPress={() => navigateTo(item.route)}
-                    disabled={!item.route || isActionUpdating}
-                    style={styles.cardTop}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.title}. ${item.description}`}
-                    accessibilityHint={item.route ? 'Opens related conversation context' : undefined}
-                >
-                    <View style={styles.cardHeaderTop}>
-                        <View style={styles.iconWrap}>
+                <ListRow
+                    title={item.title}
+                    subtitle={item.description}
+                    meta={metaParts.join(' • ')}
+                    onPress={item.route && !isActionUpdating ? () => navigateTo(item.route) : undefined}
+                    disabled={isActionUpdating}
+                    leading={(
+                        <View style={[styles.iconWrap, { backgroundColor: theme.colors.background.grouped }]}>
                             <Ionicons
                                 name={getTypeIcon(item.feedType)}
                                 size={16}
                                 color={theme.colors.tint.primary}
                             />
                         </View>
-                        <View style={styles.cardHeaderText}>
-                            <Text numberOfLines={2} style={[styles.cardTitle, { color: theme.colors.text.primary }]}>
-                                {item.title}
-                            </Text>
-                            <Text style={[styles.timestampText, { color: theme.colors.text.tertiary }]}>
-                                {formatTimestamp(item.createdAt)}
-                            </Text>
-                        </View>
-                        <StatusChip label={typeLabel} tone={getTypeTone(item.feedType)} />
-                    </View>
-                    <Text numberOfLines={3} style={[styles.cardBody, { color: theme.colors.text.secondary }]}>
-                        {item.description}
-                    </Text>
-                    <View style={styles.metaRow}>
-                        {!!item.scopeLabel && (
-                            <Text style={[styles.metaText, { color: theme.colors.text.tertiary }]}>
-                                {item.scopeLabel}
-                            </Text>
-                        )}
-                        {!!actionStatus && (
-                            <StatusChip
-                                label={actionStatus}
-                                tone={getStatusTone(item.actionStatus)}
-                            />
-                        )}
-                    </View>
-                    {!!item.route && (
-                        <View style={styles.routeHintRow}>
-                            <Text style={[styles.routeHint, { color: theme.colors.tint.primary }]}>
-                                Open context
-                            </Text>
-                            <Ionicons
-                                name="chevron-forward"
-                                size={13}
-                                color={theme.colors.tint.primary}
-                            />
+                    )}
+                    trailing={(
+                        <View style={styles.rowTrailing}>
+                            <StatusChip label={typeLabel} tone={getTypeTone(item.feedType)} />
+                            {!!actionStatus && (
+                                <StatusChip
+                                    label={actionStatus}
+                                    tone={getStatusTone(item.actionStatus)}
+                                />
+                            )}
+                            {!!item.route && (
+                                <Ionicons name="chevron-forward" size={16} color={theme.colors.text.tertiary} />
+                            )}
                         </View>
                     )}
-                </TouchableOpacity>
+                />
 
                 {(item.canMarkDone || item.canCancel) && (
                     <View
@@ -253,13 +235,15 @@ export default function FeedScreen() {
                     title="Feed unavailable"
                     message={error}
                     primaryActionLabel="Retry"
-                    onPrimaryAction={loadFeed}
+                    onPrimaryAction={handleManualRefresh}
                     secondaryActionLabel="Go to Spaces"
                     onSecondaryAction={() => router.push('/(tabs)/spaces')}
                 />
             </ScreenScaffold>
         );
     }
+
+    const openReminderCount = cards.filter((card) => card.canMarkDone || card.canCancel).length;
 
     return (
         <ScreenScaffold>
@@ -268,11 +252,13 @@ export default function FeedScreen() {
                     title: 'Feed',
                     headerRight: () => (
                         <TouchableOpacity
-                            onPress={loadFeed}
+                            onPress={handleManualRefresh}
                             style={styles.headerButton}
+                            hitSlop={8}
                             accessibilityRole="button"
                             accessibilityLabel="Refresh feed"
                             accessibilityHint="Checks for latest activity updates"
+                            accessibilityState={{ busy: loading }}
                         >
                             <Ionicons name="refresh" size={20} color={theme.colors.tint.primary} />
                         </TouchableOpacity>
@@ -288,14 +274,24 @@ export default function FeedScreen() {
                     <View style={styles.headerBlock}>
                         <SectionHeader
                             title="Activity Timeline"
-                            subtitle="High-signal updates from conversations, reminders, and memory."
+                            subtitle="Recent updates from conversations, reminders, and memory."
                         />
+                        {cards.length > 0 && (
+                            <GroupedSection style={styles.summaryCard}>
+                                <View style={styles.summaryRow}>
+                                    <StatusChip label={`${cards.length} updates`} tone="info" />
+                                    {openReminderCount > 0 && (
+                                        <StatusChip label={`${openReminderCount} open reminders`} tone="warning" />
+                                    )}
+                                </View>
+                            </GroupedSection>
+                        )}
                         {!!error && (
                             <InlineBanner
                                 tone="warning"
                                 message={error}
                                 actionLabel="Retry"
-                                onActionPress={loadFeed}
+                                onActionPress={handleManualRefresh}
                             />
                         )}
                         {loading && cards.length > 0 && (
@@ -321,7 +317,11 @@ export default function FeedScreen() {
 
 const styles = StyleSheet.create({
     headerButton: {
-        marginRight: 12
+        marginRight: 12,
+        minWidth: 40,
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     listContent: {
         paddingHorizontal: 14,
@@ -332,17 +332,17 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         gap: 8
     },
+    summaryCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 10
+    },
+    summaryRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8
+    },
     feedCard: {
         marginBottom: 10
-    },
-    cardTop: {
-        paddingHorizontal: 12,
-        paddingVertical: 12
-    },
-    cardHeaderTop: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10
     },
     iconWrap: {
         width: 26,
@@ -351,47 +351,20 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center'
     },
-    cardHeaderText: {
-        flex: 1
-    },
-    cardTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    timestampText: {
-        marginTop: 3,
-        fontSize: 11
-    },
-    cardBody: {
-        marginTop: 6,
-        fontSize: 14,
-        lineHeight: 20
-    },
-    metaRow: {
-        marginTop: 8,
+    rowTrailing: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        flexWrap: 'wrap'
-    },
-    metaText: {
-        fontSize: 12
-    },
-    routeHint: {
-        fontSize: 12,
-        fontWeight: '600'
-    },
-    routeHintRow: {
-        marginTop: 7,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        maxWidth: 170
     },
     cardActions: {
         borderTopWidth: StyleSheet.hairlineWidth,
         paddingHorizontal: 12,
         paddingVertical: 10,
         flexDirection: 'row',
-        gap: 8
+        gap: 8,
+        flexWrap: 'wrap'
     }
 });

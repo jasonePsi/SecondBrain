@@ -86,6 +86,11 @@ test('toUserFacingProviderMessage keeps fallback for unknown non-empty errors', 
   assert.equal(message, 'Something else failed');
 });
 
+test('toUserFacingProviderMessage strips trailing request id suffix from unknown messages', () => {
+  const message = toUserFacingProviderMessage('Temporary proxy issue (request turn-17)');
+  assert.equal(message, 'Temporary proxy issue');
+});
+
 test('toUserFacingProviderMessage uses deterministic fallback for empty/non-string errors', () => {
   assert.equal(
     toUserFacingProviderMessage('   '),
@@ -124,6 +129,20 @@ test('formatProviderStatusReason uses stable unavailable fallback when detail co
   assert.equal(
     message,
     'Cloud provider is currently unavailable. Verify proxy setup and retry.'
+  );
+});
+
+test('formatProviderStatusReason appends trace when diagnostics are enabled without detail code', () => {
+  const message = formatProviderStatusReason({
+    provider: 'cloud',
+    label: 'Cloud',
+    available: false,
+    configured: true,
+    requestId: 'trace-only'
+  });
+  assert.equal(
+    message,
+    'Cloud provider is currently unavailable. Verify proxy setup and retry. (trace trace-only)'
   );
 });
 

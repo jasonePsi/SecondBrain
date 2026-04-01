@@ -131,6 +131,9 @@ export type SettingsModelStatus =
     | 'active'
     | 'missing';
 
+export type SettingsProviderTone = 'neutral' | 'success' | 'warning' | 'error';
+export type SettingsModelTone = 'neutral' | 'success' | 'warning' | 'info';
+
 export const getSettingsModelStatus = (input: {
     modelId: string;
     activeModelId?: string | null;
@@ -160,6 +163,26 @@ export const getSettingsModelStatusLabel = (status: SettingsModelStatus): string
     if (status === 'downloading') return 'Downloading';
     if (status === 'missing') return 'Missing File';
     return 'Available';
+};
+
+export const getSettingsProviderTone = (
+    status: AIProviderStatus | undefined,
+    isActive: boolean
+): SettingsProviderTone => {
+    if (!status) return 'neutral';
+    if (isActive && !status.available) return 'error';
+    if (isActive && status.available) return 'success';
+    if (!status.configured) return 'warning';
+    return status.available ? 'neutral' : 'warning';
+};
+
+export const getSettingsModelStatusTone = (
+    status: SettingsModelStatus
+): SettingsModelTone => {
+    if (status === 'active') return 'success';
+    if (status === 'missing') return 'warning';
+    if (status === 'available') return 'info';
+    return 'neutral';
 };
 
 export const getSettingsModelActionState = (input: {
@@ -260,6 +283,76 @@ export const deriveSettingsProviderFeedback = (
         loadError,
         localFallbackWarning
     };
+};
+
+export const getLocalModelSummary = (input: {
+    activeProvider: AIProviderType;
+    activeModelName: string | null;
+    activeModelMissing: boolean;
+    activeModelSizeBytes?: number;
+    usableInstalledModelCount: number;
+}): {
+    title: string;
+    body: string;
+    statusLabel: string;
+    statusTone: 'success' | 'warning';
+} => {
+    const usableInstalledModelCount = normalizeCount(input.usableInstalledModelCount);
+    const activeProvider = input.activeProvider;
+
+    if (input.activeModelName) {
+        const statusLabel = input.activeModelMissing
+            ? 'Missing File'
+            : (activeProvider === 'cloud' ? 'Fallback Ready' : 'Active');
+        return {
+            title: input.activeModelName,
+            body: input.activeModelSizeBytes && input.activeModelSizeBytes > 0
+                ? `Size on disk: ${(input.activeModelSizeBytes / 1_000_000_000).toFixed(1)} GB`
+                : 'Model is registered on this device.',
+            statusLabel,
+            statusTone: input.activeModelMissing ? 'warning' : 'success'
+        };
+    }
+
+    if (activeProvider === 'cloud') {
+        return {
+            title: 'No local fallback selected',
+            body: usableInstalledModelCount > 0
+                ? 'Select an installed model as fallback to keep offline mode ready.'
+                : 'Install a local model below so offline mode stays available.',
+            statusLabel: 'Fallback Missing',
+            statusTone: 'warning'
+        };
+    }
+
+    return {
+        title: 'No active local model selected',
+        body: usableInstalledModelCount > 0
+            ? 'Choose an installed model below to continue local chat.'
+            : 'Install and activate a local model below to continue chatting locally.',
+        statusLabel: 'Setup Required',
+        statusTone: 'warning'
+    };
+};
+
+export const getDeleteModelSuccessMessage = (input: {
+    activeProvider: AIProviderType;
+    deletedWasActive: boolean;
+    fallbackActiveModelName?: string | null;
+}): string => {
+    if (input.deletedWasActive && input.fallbackActiveModelName) {
+        return input.activeProvider === 'cloud'
+            ? `${input.fallbackActiveModelName} is now set as local fallback. Cloud provider remains active.`
+            : `${input.fallbackActiveModelName} is now active.`;
+    }
+
+    if (input.deletedWasActive) {
+        return input.activeProvider === 'cloud'
+            ? 'Local fallback model was removed. Cloud provider remains active, but offline mode now requires installing a local model.'
+            : 'No installed models remain. Install and activate a model to continue chatting locally.';
+    }
+
+    return 'Model removed from this device.';
 };
 
 export const settingsLifecycleCopy = {

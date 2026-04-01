@@ -80,6 +80,7 @@ export default function DownloadScreen() {
     };
 
     const handleRetry = () => {
+        triggerHaptic('selection', reducedMotion);
         setProgress(0);
         setError(null);
         hasStartedRef.current = true;
@@ -101,14 +102,28 @@ export default function DownloadScreen() {
             : downloading
                 ? 'Installing'
                 : 'Preparing';
+    const stageTitle = complete
+        ? 'Model Ready'
+        : error
+            ? 'Install Interrupted'
+            : 'Installing Local Model';
+    const stageSubtitle = complete
+        ? 'Setup is complete. Opening your spaces now.'
+        : error
+            ? 'Setup stopped before completion. Retry or return to model selection.'
+            : 'SecondBrain is preparing your on-device model.';
+    const progressTitle = complete ? 'Installation complete' : (downloading ? 'Download progress' : 'Preparing download');
+    const actionHint = downloading && !error && !complete
+        ? 'Back is disabled while setup is running.'
+        : 'You can return and adjust your model choice at any time.';
 
     return (
         <ScreenScaffold>
             <Stack.Screen options={{ title: 'Model Install' }} />
             <View style={styles.content}>
                 <SectionHeader
-                    title={complete ? 'Model Ready' : (error ? 'Install Interrupted' : 'Installing Local Model')}
-                    subtitle="SecondBrain is preparing your on-device model."
+                    title={stageTitle}
+                    subtitle={stageSubtitle}
                     trailing={<StatusChip label={stageLabel} tone={complete ? 'success' : error ? 'warning' : 'info'} />}
                 />
 
@@ -125,7 +140,7 @@ export default function DownloadScreen() {
 
                 <GroupedSection style={styles.progressCard}>
                     <Text style={[styles.progressTitle, { color: theme.colors.text.primary }]}>
-                        {complete ? 'Installation complete' : 'Download progress'}
+                        {progressTitle}
                     </Text>
                     <View
                         style={[
@@ -150,7 +165,7 @@ export default function DownloadScreen() {
                         <View style={styles.spinnerRow}>
                             <ActivityIndicator size="small" color={theme.colors.tint.primary} />
                             <Text style={[styles.spinnerText, { color: theme.colors.text.tertiary }]}>
-                                Keep this screen open. Setup will continue automatically.
+                                Keep this screen open. Download, validation, and activation continue automatically.
                             </Text>
                         </View>
                     )}
@@ -167,6 +182,8 @@ export default function DownloadScreen() {
                     <InlineBanner
                         tone="error"
                         message={error}
+                        actionLabel="Retry"
+                        onActionPress={handleRetry}
                     />
                 )}
 
@@ -184,9 +201,7 @@ export default function DownloadScreen() {
                         disabled={downloading && !error && !complete}
                     />
                     <Text style={[styles.actionHint, { color: theme.colors.text.tertiary }]}>
-                        {downloading && !error && !complete
-                            ? 'Back becomes available if installation fails or completes.'
-                            : 'You can return to adjust your model choice at any time.'}
+                        {actionHint}
                     </Text>
                 </GroupedSection>
             </View>

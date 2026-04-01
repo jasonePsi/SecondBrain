@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { AppButton } from './AppButton';
 import { useAppTheme } from '../../theme/theme';
 
@@ -24,9 +25,31 @@ export function InlineBanner({
         : tone === 'warning'
             ? theme.colors.status.warning
             : theme.colors.status.info;
+    const iconName: React.ComponentProps<typeof Ionicons>['name'] = tone === 'error'
+        ? 'alert-circle-outline'
+        : tone === 'warning'
+            ? 'warning-outline'
+            : 'information-circle-outline';
+    const accessibilityPrefix = tone === 'error'
+        ? 'Error'
+        : tone === 'warning'
+            ? 'Warning'
+            : 'Info';
 
     return (
-        <View style={[styles.container, { backgroundColor: `${toneColor}14`, borderColor: `${toneColor}33` }]}>
+        <View
+            style={[styles.container, { backgroundColor: `${toneColor}14`, borderColor: `${toneColor}33` }]}
+            accessible
+            accessibilityRole={tone === 'info' ? 'text' : 'alert'}
+            accessibilityLiveRegion={tone === 'error' ? 'assertive' : 'polite'}
+            accessibilityLabel={`${accessibilityPrefix}. ${message}`}
+        >
+            <Ionicons
+                name={iconName}
+                size={16}
+                color={toneColor}
+                style={styles.icon}
+            />
             <Text style={[styles.message, { color: toneColor }]}>{message}</Text>
             {!!actionLabel && !!onActionPress && (
                 <AppButton
@@ -50,8 +73,12 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 10
     },
+    icon: {
+        marginTop: 1
+    },
     message: {
         flex: 1,
-        fontSize: 13
+        fontSize: 13,
+        lineHeight: 18
     }
 });

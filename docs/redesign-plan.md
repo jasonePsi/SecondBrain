@@ -2,12 +2,28 @@
 
 ## Scope and Guardrails
 
-This plan defines the product/design direction before broad UI restyling.
+This plan defines the product/design direction and rollout guardrails for the redesign.
 
 - Preserve all current behavior across local + cloud provider paths.
 - Keep data, provider, memory, and extraction architecture intact.
 - Favor native iOS patterns over custom visual novelty.
 - Avoid broad rewrites until shared primitives are in place.
+
+## Implementation Status Checkpoint (April 1, 2026)
+
+Already landed:
+
+- Semantic theme foundation is in place (`/src/theme/theme.ts`).
+- Shared UI primitives are in place (`/src/components/ui/*`) and already used across multiple screens.
+- Root/tab shell and major surface scaffolds are theme-aware.
+- Reduced-motion-aware interaction feedback baseline exists.
+- Thread, Settings/onboarding, and knowledge surfaces have been migrated to the shared design system direction.
+
+Still incomplete:
+
+- Runtime-heavy screens (`Thread`, `Settings`) are still larger modules and remain the highest practical regression risk.
+- Final confidence still depends on device-level manual QA (speech, provider switching, lifecycle timing, long-history behavior).
+- Ongoing maintenance should keep using shared primitives/tokens and avoid reintroducing one-off styling paths.
 
 ## 1) Current Product + UI Architecture Audit
 
@@ -286,8 +302,7 @@ Planned shared primitives (small + practical):
 
 ## Open Design Questions
 
-1. Tab order finalization: keep current order or promote `Spaces` to first tab in implementation phase.
+1. Tab order finalization: resolved. `Spaces` is first in the tab order and should remain primary.
 2. `CaptureFAB` future: retain global FAB in select screens vs migrate to native header/section actions for consistency.
 3. Diagnostics verbosity policy: how much provider detail code/trace info should remain visible by default vs expanded state.
 4. Thread header density: rename/delete + provider status surface should stay in alert menu or move to a compact sheet.
-

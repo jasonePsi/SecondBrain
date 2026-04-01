@@ -25,7 +25,7 @@ export function ListRow({
 }: ListRowProps) {
     const theme = useAppTheme();
     const reducedMotion = useReducedMotion();
-    const accessibilityLabel = subtitle ? `${title}. ${subtitle}` : title;
+    const accessibilityLabel = [title, subtitle, meta].filter(Boolean).join('. ');
     const content = (
         <View style={styles.rowContent}>
             {!!leading && <View style={styles.leading}>{leading}</View>}
@@ -62,7 +62,7 @@ export function ListRow({
             accessibilityLabel={accessibilityLabel}
             accessibilityState={{ disabled: !!disabled }}
             accessibilityHint="Opens details"
-            hitSlop={4}
+            hitSlop={6}
             style={({ pressed }) => [
                 styles.row,
                 pressed && !disabled && {

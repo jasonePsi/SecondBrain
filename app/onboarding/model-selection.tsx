@@ -112,11 +112,16 @@ export default function ModelSelectionScreen() {
             }
         } catch (error) {
             console.error('Error loading model data:', error);
-            setLoadError('Model list is temporarily unavailable. Please retry.');
+            setLoadError('Model list is temporarily unavailable. Please try again.');
             triggerHaptic('error', reducedMotion);
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleRefreshModels = () => {
+        triggerHaptic('selection', reducedMotion);
+        loadData();
     };
 
     const getModelStatus = (modelId: string): ModelRowStatus => {
@@ -129,6 +134,17 @@ export default function ModelSelectionScreen() {
         () => models.find((model) => model.id === selectedModel) || null,
         [models, selectedModel]
     );
+    const selectedModelLowStorageRisk = !!selectedModelConfig
+        && availableStorage < selectedModelConfig.sizeBytes * 1.5;
+    const installedUsableCount = installedModelIds.size;
+    const selectionNextStepTitle = selectedModelConfig
+        ? `Selected: ${selectedModelConfig.name}`
+        : 'Select a model to continue';
+    const selectionNextStepHint = selectedModel && installedModelIds.has(selectedModel)
+        ? 'This sets your active local model now.'
+        : selectedModelConfig
+            ? `Next step downloads and activates ${selectedModelConfig.name}.`
+            : 'Choose one model to continue setup.';
 
     const handleContinue = async () => {
         if (!selectedModel) return;
@@ -184,7 +200,24 @@ export default function ModelSelectionScreen() {
                         <StatusChip label={formatBytes(availableStorage)} tone="info" />
                     </View>
                     <Text style={[styles.storageHint, { color: theme.colors.text.tertiary }]}>
-                        Choose a smaller model for faster setup and lower battery impact, or a larger model for higher quality.
+                        Choose a smaller model for faster setup and lower battery impact, or a larger model for better answer quality.
+                    </Text>
+                </GroupedSection>
+
+                <GroupedSection style={styles.lifecycleCard}>
+                    <View style={styles.lifecycleTopRow}>
+                        <Text style={[styles.lifecycleLabel, { color: theme.colors.text.secondary }]}>
+                            Installed usable models
+                        </Text>
+                        <StatusChip
+                            label={`${installedUsableCount}`}
+                            tone={installedUsableCount > 0 ? 'success' : 'warning'}
+                        />
+                    </View>
+                    <Text style={[styles.lifecycleHint, { color: theme.colors.text.tertiary }]}>
+                        {installedUsableCount > 0
+                            ? 'You can activate an installed model immediately, or download another one.'
+                            : 'No local model is ready yet. Download one model to finish onboarding.'}
                     </Text>
                 </GroupedSection>
 
@@ -193,7 +226,7 @@ export default function ModelSelectionScreen() {
                         tone="error"
                         message={loadError}
                         actionLabel="Retry"
-                        onActionPress={loadData}
+                        onActionPress={handleRefreshModels}
                     />
                 )}
 
@@ -211,11 +244,16 @@ export default function ModelSelectionScreen() {
                     return (
                         <TouchableOpacity
                             key={model.id}
-                            onPress={() => setSelectedModel(model.id)}
+                            onPress={() => {
+                                triggerHaptic('selection', reducedMotion);
+                                setSelectedModel(model.id);
+                            }}
                             activeOpacity={0.9}
+                            hitSlop={6}
                             accessibilityRole="button"
                             accessibilityLabel={`${model.name}. ${statusLabel(status)}. ${formatBatteryImpact(model.batteryImpact)}.`}
                             accessibilityHint="Selects this model for onboarding"
+                            accessibilityState={{ selected: isSelected }}
                         >
                             <GroupedSection
                                 style={[
@@ -250,7 +288,7 @@ export default function ModelSelectionScreen() {
                                 </Text>
 
                                 <Text style={[styles.modelMeta, { color: theme.colors.text.tertiary }]}>
-                                    Size {formatBytes(model.sizeBytes)} • Speed {model.speedRating}/5 • Quality {model.qualityRating}/5 • {formatBatteryImpact(model.batteryImpact)}
+                                    Size {formatBytes(model.sizeBytes)} • Speed {model.speedRating}/5 • Quality {model.qualityRating}/5 • Battery {formatBatteryImpact(model.batteryImpact)}
                                 </Text>
 
                                 {lowStorageRisk && (
@@ -268,22 +306,24 @@ export default function ModelSelectionScreen() {
 
                 <GroupedSection style={styles.ctaCard}>
                     <Text style={[styles.ctaTitle, { color: theme.colors.text.primary }]}>
-                        {selectedModelConfig
-                            ? `Selected: ${selectedModelConfig.name}`
-                            : 'Select a model to continue'}
+                        {selectionNextStepTitle}
                     </Text>
                     <Text style={[styles.ctaHint, { color: theme.colors.text.secondary }]}>
-                        {selectedModel && installedModelIds.has(selectedModel)
-                            ? 'This sets your active local model now.'
-                            : 'Next step downloads and activates the selected model.'}
+                        {selectionNextStepHint}
                     </Text>
+                    {selectedModelLowStorageRisk && (
+                        <InlineBanner
+                            tone="warning"
+                            message="Selected model may exceed available storage during install. Consider a smaller model first."
+                        />
+                    )}
                     <View style={styles.ctaActions}>
                         <AppButton
                             label={submitting
                                 ? 'Please wait…'
                                 : selectedModel && installedModelIds.has(selectedModel)
                                     ? 'Use Selected Model'
-                                    : 'Download & Continue'}
+                                    : `Download & Continue${selectedModelConfig ? ` (${formatBytes(selectedModelConfig.sizeBytes)})` : ''}`}
                             onPress={handleContinue}
                             disabled={!selectedModel || submitting}
                             loading={submitting}
@@ -291,7 +331,7 @@ export default function ModelSelectionScreen() {
                         <AppButton
                             label="Refresh Model List"
                             variant="secondary"
-                            onPress={loadData}
+                            onPress={handleRefreshModels}
                             disabled={submitting}
                         />
                     </View>
@@ -323,6 +363,24 @@ const styles = StyleSheet.create({
         fontWeight: '600'
     },
     storageHint: {
+        marginTop: 6,
+        fontSize: 12
+    },
+    lifecycleCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 12
+    },
+    lifecycleTopRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8
+    },
+    lifecycleLabel: {
+        fontSize: 13,
+        fontWeight: '600'
+    },
+    lifecycleHint: {
         marginTop: 6,
         fontSize: 12
     },

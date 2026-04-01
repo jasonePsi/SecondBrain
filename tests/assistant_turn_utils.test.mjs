@@ -521,3 +521,80 @@ test('executeAssistantTurn fails at queue stage but keeps persisted assistant st
   assert.equal(result.error.message, 'queue failed');
   assert.equal(inFlightTurnRef.current, null);
 });
+
+test('executeAssistantTurn fails at provider resolution stage after persisting user message', async () => {
+  const inFlightTurnRef = { current: null };
+  const callOrder = [];
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-provider-failure',
+    threadId: 'thread-exec-provider-failure',
+    startedAt: 8800,
+    inFlightTurnRef,
+    persistUserMessage: async () => {
+      callOrder.push('persist_user');
+    },
+    resolveProvider: async () => {
+      callOrder.push('resolve_provider');
+      throw new Error('provider resolution failed');
+    },
+    initProvider: async () => {
+      callOrder.push('init_provider');
+    },
+    buildMemoryContext: async () => {
+      callOrder.push('build_context');
+      return {};
+    },
+    generateAssistantReply: async () => {
+      callOrder.push('generate');
+      return 'assistant reply';
+    },
+    persistAssistantReply: async () => {
+      callOrder.push('persist_assistant');
+    },
+    queuePostProcessing: async () => {
+      callOrder.push('queue');
+    }
+  }));
+
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.stage, TURN_STAGES.RESOLVE_PROVIDER);
+  assert.equal(result.provider, undefined);
+  assert.equal(result.userMessagePersisted, true);
+  assert.equal(result.assistantMessagePersisted, false);
+  assert.equal(result.assistantReply, undefined);
+  assert.equal(result.error instanceof Error, true);
+  assert.equal(result.error.message, 'provider resolution failed');
+  assert.deepEqual(callOrder, ['persist_user', 'resolve_provider']);
+  assert.equal(inFlightTurnRef.current, null);
+});
+
+test('executeAssistantTurn fails at assistant persistence stage and keeps generated reply context', async () => {
+  const inFlightTurnRef = { current: null };
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-persist-assistant-failure',
+    threadId: 'thread-exec-persist-assistant-failure',
+    startedAt: 9900,
+    inFlightTurnRef,
+    persistUserMessage: async () => {},
+    resolveProvider: async () => 'local',
+    initProvider: async () => {},
+    buildMemoryContext: async () => ({ compact: true }),
+    generateAssistantReply: async () => 'assistant draft reply',
+    persistAssistantReply: async () => {
+      throw new Error('persist assistant failed');
+    },
+    queuePostProcessing: async () => {}
+  }));
+
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.stage, TURN_STAGES.PERSIST_ASSISTANT_REPLY);
+  assert.equal(result.provider, 'local');
+  assert.equal(result.userMessagePersisted, true);
+  assert.equal(result.assistantMessagePersisted, false);
+  assert.equal(result.assistantReply, 'assistant draft reply');
+  assert.equal(result.error instanceof Error, true);
+  assert.equal(result.error.message, 'persist assistant failed');
+  assert.equal(inFlightTurnRef.current, null);
+});

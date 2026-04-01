@@ -11,10 +11,12 @@ import { Stack, useRouter } from 'expo-router';
 import { FeedRepo } from '../../src/repositories/feed_repo';
 import { SpaceRepo } from '../../src/repositories/space_repo';
 import { useAppTheme } from '../../src/theme/theme';
-import { AppButton, InlineBanner, ScreenScaffold, SectionHeader } from '../../src/components/ui';
+import { triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
+import { AppButton, GroupedSection, InlineBanner, ScreenScaffold, SectionHeader } from '../../src/components/ui';
 
 export default function NewSpaceScreen() {
     const theme = useAppTheme();
+    const reducedMotion = useReducedMotion();
     const [name, setName] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -27,10 +29,12 @@ export default function NewSpaceScreen() {
         try {
             const id = await SpaceRepo.create(name.trim());
             await FeedRepo.create(id, 'space_created', id);
+            triggerHaptic('success', reducedMotion);
             router.replace(`/space/${id}`);
         } catch (createError) {
             console.error(createError);
             setError('Could not create this space. Please try again.');
+            triggerHaptic('error', reducedMotion);
         } finally {
             setIsSubmitting(false);
         }
@@ -45,18 +49,10 @@ export default function NewSpaceScreen() {
             >
                 <SectionHeader
                     title="Create Space"
-                    subtitle="Name a workspace for a domain of conversations."
+                    subtitle="Create a calm home for related threads."
                 />
 
-                <View
-                    style={[
-                        styles.formCard,
-                        {
-                            backgroundColor: theme.colors.background.surface,
-                            borderColor: theme.colors.separator.subtle
-                        }
-                    ]}
-                >
+                <GroupedSection style={styles.formCard}>
                     <Text style={[styles.label, { color: theme.colors.text.secondary }]}>Space Name</Text>
                     <TextInput
                         style={[
@@ -81,14 +77,25 @@ export default function NewSpaceScreen() {
                     {!!error && (
                         <InlineBanner tone="error" message={error} />
                     )}
-                </View>
+                </GroupedSection>
 
-                <AppButton
-                    label={isSubmitting ? 'Creating space…' : 'Create Space'}
-                    onPress={handleCreate}
-                    disabled={!name.trim() || isSubmitting}
-                    loading={isSubmitting}
-                />
+                <View style={styles.actionsRow}>
+                    <AppButton
+                        label="Cancel"
+                        variant="secondary"
+                        onPress={() => {
+                            triggerHaptic('selection', reducedMotion);
+                            router.back();
+                        }}
+                        disabled={isSubmitting}
+                    />
+                    <AppButton
+                        label={isSubmitting ? 'Creating space…' : 'Create Space'}
+                        onPress={handleCreate}
+                        disabled={!name.trim() || isSubmitting}
+                        loading={isSubmitting}
+                    />
+                </View>
             </KeyboardAvoidingView>
         </ScreenScaffold>
     );
@@ -101,8 +108,6 @@ const styles = StyleSheet.create({
         paddingTop: 16
     },
     formCard: {
-        borderWidth: 1,
-        borderRadius: 14,
         padding: 14,
         marginBottom: 18
     },
@@ -121,5 +126,9 @@ const styles = StyleSheet.create({
     helperText: {
         marginTop: 8,
         fontSize: 12
+    },
+    actionsRow: {
+        flexDirection: 'row',
+        gap: 8
     }
 });

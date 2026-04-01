@@ -1,24 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-    ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
-    Modal,
     NativeModules,
     Platform,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
     View
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Message, MessageRepo } from '../../src/repositories/message_repo';
 import { ThreadRepo } from '../../src/repositories/thread_repo';
 import { FeedRepo } from '../../src/repositories/feed_repo';
-import { Colors } from '../../src/constants/Colors';
 import { Ionicons } from '@expo/vector-icons';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { LLMService, sanitizeAssistantResponse } from '../../src/services/LLMService';
@@ -47,18 +42,26 @@ import {
     resolveMutationRefreshVisibleCount,
     shouldLoadOlderHistory
 } from '../../src/services/thread_history_utils';
+import {
+    resolveThreadComposerPlaceholder,
+    resolveThreadStatusText
+} from '../../src/services/thread_ui_state_utils';
 import { toUserFacingProviderMessage } from '../../src/services/provider_status_copy_utils';
 import { debugLog } from '../../src/services/runtime_log';
 import { runLayoutFeedback, triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
-import { AppButton, InlineBanner } from '../../src/components/ui';
+import { useAppTheme } from '../../src/theme/theme';
+import { AppButton, LoadingStateView, ScreenScaffold } from '../../src/components/ui';
 import { ThreadMessageBubble } from '../../src/components/thread/ThreadMessageBubble';
+import { ThreadProviderBanner } from '../../src/components/thread/ThreadProviderBanner';
+import {
+    ThreadHistoryHeader,
+    type ThreadJumpHint
+} from '../../src/components/thread/ThreadHistoryHeader';
+import { ThreadComposer } from '../../src/components/thread/ThreadComposer';
+import { ThreadRenameModal } from '../../src/components/thread/ThreadRenameModal';
 
 type SupportedSpeechLanguage = 'el-GR' | 'en-US';
 type TurnProvider = 'local' | 'cloud';
-type JumpHint = {
-    kind: 'found' | 'older' | 'missing';
-    text: string;
-};
 
 const MESSAGE_PAGE_SIZE = 50;
 
@@ -105,23 +108,6 @@ const createTurnId = (): string => {
     return `turn_${Date.now()}_${suffix}`;
 };
 
-const getTurnStatusText = (
-    stage: TurnStage | null,
-    provider: TurnProvider | null
-): string => {
-    if (stage === TURN_STAGES.PERSIST_USER_MESSAGE) return 'Saving your message…';
-    if (stage === TURN_STAGES.RESOLVE_PROVIDER) return 'Selecting AI provider…';
-    if (stage === TURN_STAGES.INIT_PROVIDER) return 'Starting AI provider…';
-    if (stage === TURN_STAGES.BUILD_MEMORY_CONTEXT) return 'Preparing conversation context…';
-    if (stage === TURN_STAGES.GENERATE_ASSISTANT_REPLY) {
-        if (provider === 'cloud') return 'Waiting for cloud response…';
-        return 'Generating reply…';
-    }
-    if (stage === TURN_STAGES.PERSIST_ASSISTANT_REPLY) return 'Saving assistant reply…';
-    if (stage === TURN_STAGES.QUEUE_POST_PROCESSING) return 'Finalizing memory updates…';
-    return 'Assistant is replying…';
-};
-
 const toSafeErrorMessage = (error: unknown, fallback: string): string => {
     if (error instanceof Error && error.message.trim().length > 0) return error.message.trim();
     if (typeof error === 'string' && error.trim().length > 0) return error.trim();
@@ -166,7 +152,7 @@ export default function ThreadScreen() {
     const speechOperationRequestRef = useRef(0);
     const [micStatus, setMicStatus] = useState('Microphone ready');
     const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-    const [jumpHint, setJumpHint] = useState<JumpHint | null>(null);
+    const [jumpHint, setJumpHint] = useState<ThreadJumpHint | null>(null);
     const lastJumpedMessageIdRef = useRef<string | null>(null);
     const flashListRef = useRef<any>(null);
     const historySyncRequestRef = useRef(0);
@@ -183,9 +169,30 @@ export default function ThreadScreen() {
     const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
     const [renameValue, setRenameValue] = useState('');
     const [savingRename, setSavingRename] = useState(false);
+    const theme = useAppTheme();
     const reducedMotion = useReducedMotion();
     const providerUnavailable = !!llmInitError && !llmReady && !retryingProvider;
     const interactionDisabled = isLoading || retryingProvider;
+    const providerRetryDisabled = retryingProvider || shouldBlockProviderRetryForThread(
+        id,
+        inFlightTurnRef.current,
+        isLoading
+    );
+    const turnStatusText = resolveThreadStatusText({
+        isLoading,
+        activeTurnStage,
+        activeTurnProvider,
+        retryingProvider,
+        providerUnavailable
+    });
+    const micStatusText = micStatus !== 'Microphone ready' ? micStatus : null;
+    const composerPlaceholder = resolveThreadComposerPlaceholder({
+        providerUnavailable,
+        retryingProvider,
+        isLoading,
+        isRecording
+    });
+    const sendDisabled = providerUnavailable || inputText.trim().length === 0 || interactionDisabled;
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -358,6 +365,7 @@ export default function ThreadScreen() {
             }
         } finally {
             if (isCurrentThreadActive(threadId)) {
+                if (requestId !== historySyncRequestRef.current) return;
                 setLoadingOlderMessages(false);
             }
         }
@@ -778,6 +786,22 @@ export default function ThreadScreen() {
                     canApplyTurnState
                 });
             }
+        }).catch((error: unknown) => {
+            console.error('[ThreadTurn] executeAssistantTurn crashed', {
+                turnId,
+                threadId,
+                message: toSafeErrorMessage(error, 'Unexpected turn execution failure')
+            });
+            return {
+                outcome: 'failed' as const,
+                stage: TURN_STAGES.START,
+                provider: undefined,
+                userMessagePersisted: false,
+                assistantMessagePersisted: false,
+                memoryContext: undefined,
+                assistantReply: undefined,
+                error
+            };
         });
 
         activeProvider = turnResult.provider as TurnProvider | undefined;
@@ -921,6 +945,7 @@ export default function ThreadScreen() {
                 setRetryingProvider(true);
                 setMicStatus('Retrying AI connection…');
                 setLlmInitError(null);
+                triggerHaptic('selection', reducedMotion);
             }
             await LLMService.init();
             if (!canApplyRetryState()) return;
@@ -1023,6 +1048,7 @@ export default function ThreadScreen() {
     };
 
     const openRenameModal = () => {
+        triggerHaptic('selection', reducedMotion);
         setRenameValue(threadTitle);
         setIsRenameModalVisible(true);
     };
@@ -1049,7 +1075,7 @@ export default function ThreadScreen() {
                 threadId: id,
                 message: toSafeErrorMessage(error, 'Rename failed')
             });
-            Alert.alert('Rename Failed', 'Could not rename this thread.');
+            Alert.alert('Rename Unavailable', 'Could not rename this thread right now. Please try again.');
             triggerHaptic('error', reducedMotion);
         } finally {
             setSavingRename(false);
@@ -1077,7 +1103,7 @@ export default function ThreadScreen() {
                                     threadId: id,
                                     message: toSafeErrorMessage(error, 'Delete failed')
                                 });
-                                Alert.alert('Delete Failed', 'Could not delete this thread.');
+                                Alert.alert('Delete Unavailable', 'Could not delete this thread right now. Please try again.');
                                 triggerHaptic('error', reducedMotion);
                             }
                         }
@@ -1088,6 +1114,7 @@ export default function ThreadScreen() {
     };
 
     const handleSettings = () => {
+        triggerHaptic('selection', reducedMotion);
         Alert.alert(
             'Thread Options',
             'Choose an action',
@@ -1100,17 +1127,15 @@ export default function ThreadScreen() {
     };
 
     const retryHistoryLoad = useCallback(() => {
+        triggerHaptic('selection', reducedMotion);
         if (historyLoadErrorSource === 'older') {
             loadOlderMessages();
             return;
         }
         loadInitialMessages();
-    }, [historyLoadErrorSource, loadInitialMessages, loadOlderMessages]);
+    }, [historyLoadErrorSource, loadInitialMessages, loadOlderMessages, reducedMotion]);
 
     const renderListHeader = () => {
-        const hasHistoryHeaderContent = totalMessageCount > 0 || !!historyLoadError || !!jumpHint;
-        if (!hasHistoryHeaderContent) return null;
-        const remaining = Math.max(0, totalMessageCount - loadedMessageCount);
         const blockOlderLoad = shouldBlockSendForThread(
             id,
             inFlightTurnRef.current,
@@ -1118,71 +1143,28 @@ export default function ThreadScreen() {
         ) || retryingProvider;
 
         return (
-            <View style={styles.historyHeader}>
-                {!!jumpHint && (
-                    <View style={styles.jumpHintCard}>
-                        <Text style={[
-                            styles.jumpHintText,
-                            jumpHint.kind === 'missing' && styles.jumpHintMissingText
-                        ]}>
-                            {jumpHint.text}
-                        </Text>
-                        {(jumpHint.kind === 'older' && hasOlderMessages) ? (
-                            <AppButton
-                                size="sm"
-                                variant="secondary"
-                                label={loadingOlderMessages ? 'Loading…' : 'Load earlier'}
-                                onPress={loadOlderMessages}
-                                disabled={loadingOlderMessages || blockOlderLoad}
-                                loading={loadingOlderMessages}
-                            />
-                        ) : (
-                            <AppButton
-                                size="sm"
-                                variant="secondary"
-                                label="Dismiss"
-                                onPress={() => setJumpHint(null)}
-                            />
-                        )}
-                    </View>
-                )}
-                {!!historyLoadError && (
-                    <InlineBanner
-                        tone="error"
-                        message={historyLoadError}
-                        actionLabel={historyLoadErrorSource === 'older' ? 'Retry older messages' : 'Retry'}
-                        onActionPress={retryHistoryLoad}
-                    />
-                )}
-                {totalMessageCount > 0 && (
-                    <View style={styles.historyMetaCard}>
-                        {hasOlderMessages ? (
-                            <AppButton
-                                size="sm"
-                                variant="secondary"
-                                label={loadingOlderMessages
-                                    ? 'Loading earlier messages…'
-                                    : blockOlderLoad
-                                        ? 'Finish current reply first'
-                                        : `Load earlier messages (${remaining} remaining)`}
-                                onPress={loadOlderMessages}
-                                disabled={loadingOlderMessages || blockOlderLoad}
-                                loading={loadingOlderMessages}
-                            />
-                        ) : (
-                            <Text style={styles.historyInfoText}>All messages loaded</Text>
-                        )}
-                        <Text style={styles.historyMetaText}>
-                            {messages.length} of {totalMessageCount} message(s) loaded
-                        </Text>
-                    </View>
-                )}
-            </View>
+            <ThreadHistoryHeader
+                jumpHint={jumpHint}
+                hasOlderMessages={hasOlderMessages}
+                loadingOlderMessages={loadingOlderMessages}
+                blockOlderLoad={blockOlderLoad}
+                onLoadOlder={loadOlderMessages}
+                onDismissJumpHint={() => setJumpHint(null)}
+                historyLoadError={historyLoadError}
+                historyLoadErrorSource={historyLoadErrorSource}
+                onRetryHistory={retryHistoryLoad}
+                totalMessageCount={totalMessageCount}
+                loadedMessageCount={loadedMessageCount}
+                visibleMessageCount={messages.length}
+            />
         );
     };
 
     return (
-        <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+        <ScreenScaffold
+            edges={['bottom', 'left', 'right']}
+            style={[styles.container, { backgroundColor: theme.colors.background.base }]}
+        >
             <KeyboardAvoidingView
                 style={styles.keyboardContainer}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1195,21 +1177,22 @@ export default function ThreadScreen() {
                             <TouchableOpacity
                                 onPress={handleSettings}
                                 style={styles.headerButton}
+                                hitSlop={8}
                                 accessibilityRole="button"
                                 accessibilityLabel="Thread options"
                                 accessibilityHint="Opens rename and delete actions"
                             >
-                                <Ionicons name="ellipsis-horizontal-circle" size={24} color={Colors.primary} />
+                                <Ionicons name="ellipsis-horizontal-circle" size={24} color={theme.colors.tint.primary} />
                             </TouchableOpacity>
                         )
                     }}
                 />
                 <View style={styles.listContainer}>
                     {loadingInitialMessages ? (
-                        <View style={styles.loadingMessagesContainer}>
-                            <ActivityIndicator size="small" color={Colors.primary} />
-                            <Text style={styles.loadingMessagesText}>Loading conversation history…</Text>
-                        </View>
+                        <LoadingStateView
+                            title="Loading conversation"
+                            message="Loading conversation history…"
+                        />
                     ) : (
                         <FlashList
                             ref={flashListRef}
@@ -1220,15 +1203,15 @@ export default function ThreadScreen() {
                             ListHeaderComponent={renderListHeader}
                             ListEmptyComponent={(
                                 <View style={styles.emptyStateContainer}>
-                                    <Text style={styles.emptyText}>
+                                    <Text style={[styles.emptyText, { color: theme.colors.text.secondary }]}>
                                         {historyLoadErrorSource === 'initial'
-                                            ? 'Conversation is unavailable right now. Retry to continue.'
+                                            ? 'Conversation is temporarily unavailable. Retry to continue.'
                                             : 'No messages yet. Send a message to get started.'}
                                     </Text>
                                     {historyLoadErrorSource === 'initial' && (
                                         <AppButton
                                             size="sm"
-                                            label="Retry history load"
+                                            label="Retry loading history"
                                             onPress={retryHistoryLoad}
                                         />
                                     )}
@@ -1237,171 +1220,60 @@ export default function ThreadScreen() {
                         />
                     )}
                 </View>
-                <View style={styles.inputContainer}>
+                <View style={styles.bottomArea}>
                     {!!llmInitError && (
-                        <View style={styles.llmErrorBanner}>
-                            <Text style={styles.llmErrorTitle}>AI is currently unavailable</Text>
-                            <Text style={styles.llmErrorText}>{llmInitError}</Text>
-                            <View style={styles.llmErrorActionsRow}>
-                                <AppButton
-                                    size="sm"
-                                    variant="secondary"
-                                    label={retryingProvider ? 'Retrying…' : 'Retry AI'}
-                                    onPress={retryInitializeProvider}
-                                    disabled={retryingProvider}
-                                    loading={retryingProvider}
-                                />
-                                <AppButton
-                                    size="sm"
-                                    variant="secondary"
-                                    label="Open Settings"
-                                    onPress={() => router.push('/(tabs)/settings')}
-                                />
-                            </View>
-                        </View>
-                    )}
-                    {isLoading && (
-                        <Text style={styles.turnStatusText}>
-                            {getTurnStatusText(activeTurnStage, activeTurnProvider)}
-                        </Text>
-                    )}
-                    {retryingProvider && !isLoading && (
-                        <Text style={styles.turnStatusText}>Reconnecting AI…</Text>
-                    )}
-                    {providerUnavailable && !isLoading && !retryingProvider && (
-                        <Text style={styles.turnStatusText}>Sending is disabled until AI is available.</Text>
-                    )}
-                    {micStatus !== 'Microphone ready' && (
-                        <Text style={styles.micStatusText}>{micStatus}</Text>
-                    )}
-                    <View style={styles.composerRow}>
-                        <TextInput
-                            style={styles.input}
-                            value={inputText}
-                            onChangeText={setInputText}
-                            accessibilityLabel="Message composer"
-                            accessibilityHint="Type your message to the assistant"
-                            placeholder={
-                                providerUnavailable
-                                    ? 'AI unavailable. Open Settings to restore provider/model setup'
-                                    : retryingProvider
-                                    ? 'Retrying AI connection…'
-                                    : isLoading
-                                    ? 'Generating reply…'
-                                    : isRecording
-                                        ? 'Listening…'
-                                        : 'Type a message or use the mic'
-                            }
-                            placeholderTextColor={isRecording ? Colors.notification : Colors.secondaryText}
-                            multiline
-                            editable={!interactionDisabled}
+                        <ThreadProviderBanner
+                            message={llmInitError}
+                            retryingProvider={retryingProvider}
+                            retryDisabled={providerRetryDisabled}
+                            onRetry={retryInitializeProvider}
+                            onOpenSettings={() => router.push('/(tabs)/settings')}
                         />
-                        <TouchableOpacity
-                            onPress={toggleLanguage}
-                            style={styles.langButton}
-                            disabled={interactionDisabled}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Mic language ${speechLang === 'el-GR' ? 'Greek' : 'English'}`}
-                            accessibilityHint="Double tap to switch microphone language"
-                        >
-                            <Text style={styles.langText}>{speechLang === 'el-GR' ? 'EL' : 'EN'}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={toggleRecording}
-                            style={[styles.micButton, isRecording && styles.micActive]}
-                            disabled={interactionDisabled || providerUnavailable}
-                            accessibilityRole="button"
-                            accessibilityLabel={isRecording ? 'Stop voice input' : 'Start voice input'}
-                            accessibilityHint={providerUnavailable
-                                ? 'Voice input is unavailable until AI recovers'
-                                : 'Double tap to dictate a message'}
-                        >
-                            <Ionicons
-                                name={isRecording ? 'stop' : 'mic'}
-                                size={28}
-                                color={isRecording
-                                    ? 'white'
-                                    : (interactionDisabled || providerUnavailable
-                                        ? Colors.secondaryText
-                                        : Colors.primary)}
-                            />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={sendMessage}
-                            style={[
-                                styles.sendButton,
-                                (providerUnavailable || inputText.trim().length === 0 || interactionDisabled) && styles.sendButtonDisabled
-                            ]}
-                            disabled={providerUnavailable || inputText.trim().length === 0 || interactionDisabled}
-                            accessibilityRole="button"
-                            accessibilityLabel="Send message"
-                            accessibilityHint={providerUnavailable
-                                ? 'Open Settings to restore AI and send messages'
-                                : 'Sends your message to the assistant'}
-                        >
-                            {interactionDisabled ? (
-                                <ActivityIndicator size="small" color={Colors.primary} />
-                            ) : (
-                                <Ionicons
-                                    name="send"
-                                    size={22}
-                                    color={(providerUnavailable || inputText.trim().length === 0)
-                                        ? Colors.secondaryText
-                                        : Colors.primary}
-                                />
-                            )}
-                        </TouchableOpacity>
-                    </View>
+                    )}
+                    <ThreadComposer
+                        value={inputText}
+                        onChangeText={setInputText}
+                        onSend={sendMessage}
+                        onToggleLanguage={toggleLanguage}
+                        onToggleRecording={toggleRecording}
+                        speechLanguage={speechLang}
+                        isRecording={isRecording}
+                        interactionDisabled={interactionDisabled}
+                        providerUnavailable={providerUnavailable}
+                        sendDisabled={sendDisabled}
+                        showSendingActivity={interactionDisabled}
+                        placeholder={composerPlaceholder}
+                        statusText={turnStatusText}
+                        micStatusText={micStatusText}
+                    />
                 </View>
             </KeyboardAvoidingView>
-
-            <Modal
-                transparent
+            <ThreadRenameModal
                 visible={isRenameModalVisible}
-                animationType={reducedMotion ? 'none' : 'fade'}
-                onRequestClose={closeRenameModal}
-            >
-                <View style={styles.modalOverlay}>
-                    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                        <View style={styles.modalCard}>
-                            <Text style={styles.modalTitle}>Rename Thread</Text>
-                            <Text style={styles.modalSubtitle}>Choose a name that is easy to find later in search.</Text>
-                            <TextInput
-                                style={styles.modalInput}
-                                value={renameValue}
-                                onChangeText={setRenameValue}
-                                placeholder="Thread name"
-                                autoFocus
-                                returnKeyType="done"
-                                onSubmitEditing={saveRename}
-                            />
-                            <View style={styles.modalActions}>
-                                <AppButton label="Cancel" variant="secondary" onPress={closeRenameModal} />
-                                <AppButton
-                                    label={savingRename ? 'Saving…' : 'Save'}
-                                    onPress={saveRename}
-                                    disabled={!renameValue.trim() || savingRename}
-                                    loading={savingRename}
-                                />
-                            </View>
-                        </View>
-                    </KeyboardAvoidingView>
-                </View>
-            </Modal>
-        </SafeAreaView>
+                reducedMotion={reducedMotion}
+                value={renameValue}
+                saving={savingRename}
+                onChangeText={setRenameValue}
+                onClose={closeRenameModal}
+                onSave={saveRename}
+            />
+        </ScreenScaffold>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
-        flex: 1,
-        backgroundColor: Colors.background,
+        flex: 1
     },
     keyboardContainer: {
-        flex: 1,
+        flex: 1
     },
     headerButton: {
-        marginRight: 10
+        marginRight: 10,
+        minWidth: 40,
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     listContainer: {
         flex: 1
@@ -1411,16 +1283,6 @@ const styles = StyleSheet.create({
         paddingTop: 10,
         paddingBottom: 18
     },
-    loadingMessagesContainer: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10
-    },
-    loadingMessagesText: {
-        fontSize: 14,
-        color: Colors.secondaryText
-    },
     emptyStateContainer: {
         alignItems: 'center',
         gap: 10,
@@ -1428,193 +1290,10 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         textAlign: 'center',
-        color: Colors.secondaryText,
         fontSize: 14
     },
-    historyHeader: {
-        marginBottom: 12,
-        gap: 8
-    },
-    jumpHintCard: {
-        borderWidth: 1,
-        borderColor: Colors.border,
-        backgroundColor: Colors.card,
-        borderRadius: 12,
-        padding: 10,
-        gap: 8
-    },
-    jumpHintText: {
-        color: Colors.secondaryText,
-        fontSize: 13
-    },
-    jumpHintMissingText: {
-        color: Colors.notification
-    },
-    historyMetaCard: {
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: Colors.border,
-        backgroundColor: Colors.card,
-        alignItems: 'center',
-        gap: 6,
-        paddingVertical: 10,
-        paddingHorizontal: 12
-    },
-    historyInfoText: {
-        fontSize: 13,
-        color: Colors.secondaryText
-    },
-    historyMetaText: {
-        fontSize: 12,
-        color: Colors.secondaryText
-    },
-    inputContainer: {
+    bottomArea: {
         paddingHorizontal: 10,
-        paddingTop: 8,
-        paddingBottom: 10,
-        backgroundColor: Colors.background,
-        borderTopWidth: 1,
-        borderTopColor: Colors.border
-    },
-    llmErrorBanner: {
-        backgroundColor: '#FEF2F2',
-        borderWidth: 1,
-        borderColor: '#FECACA',
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        marginBottom: 8
-    },
-    llmErrorText: {
-        color: '#991B1B',
-        fontSize: 13
-    },
-    llmErrorTitle: {
-        color: '#7F1D1D',
-        fontSize: 13,
-        fontWeight: '700',
-        marginBottom: 4
-    },
-    llmErrorActionsRow: {
-        marginTop: 8,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8
-    },
-    turnStatusText: {
-        fontSize: 13,
-        color: Colors.secondaryText,
-        marginBottom: 6
-    },
-    composerRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        borderWidth: 1,
-        borderColor: Colors.border,
-        borderRadius: 18,
-        backgroundColor: Colors.card,
-        paddingHorizontal: 8,
-        paddingVertical: 6
-    },
-    input: {
-        flex: 1,
-        backgroundColor: 'transparent',
-        borderRadius: 14,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        fontSize: 16,
-        minHeight: 42,
-        maxHeight: 150,
-        marginRight: 6,
-        color: Colors.text,
-    },
-    micStatusText: {
-        fontSize: 12,
-        color: Colors.secondaryText,
-        marginBottom: 6
-    },
-    sendButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: Colors.border,
-        backgroundColor: Colors.background,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 6
-    },
-    sendButtonDisabled: {
-        opacity: 0.55
-    },
-    langButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: Colors.border,
-        backgroundColor: Colors.background,
-        marginRight: 6,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    langText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: Colors.secondaryText
-    },
-    micButton: {
-        borderWidth: 1,
-        borderColor: Colors.border,
-        borderRadius: 20,
-        backgroundColor: Colors.background,
-        width: 40,
-        height: 40,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    micActive: {
-        backgroundColor: Colors.notification,
-        borderColor: Colors.notification
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.35)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 24
-    },
-    modalCard: {
-        width: '100%',
-        backgroundColor: Colors.card,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: Colors.border,
-        padding: 16
-    },
-    modalTitle: {
-        fontSize: 17,
-        fontWeight: '700',
-        marginBottom: 4,
-        color: Colors.text
-    },
-    modalSubtitle: {
-        fontSize: 13,
-        color: Colors.secondaryText,
-        marginBottom: 10
-    },
-    modalInput: {
-        borderWidth: 1,
-        borderColor: Colors.border,
-        borderRadius: 10,
-        padding: 12,
-        fontSize: 16,
-        backgroundColor: Colors.background,
-        marginBottom: 16
-    },
-    modalActions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 8
+        paddingBottom: 6
     }
 });

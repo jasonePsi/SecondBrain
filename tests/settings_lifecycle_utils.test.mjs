@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import {
   canAutoRepairLocalProviderSwitch,
   deriveSettingsProviderFeedback,
+  getDeleteModelSuccessMessage,
   getProviderBadgeLabel,
   getProviderSwitchState,
+  getLocalModelSummary,
   getSettingsModelActionState,
   getSettingsModelStatus,
   getSettingsModelStatusLabel,
+  getSettingsModelStatusTone,
+  getSettingsProviderTone,
   resolveLocalAutoRepairCandidateModelId
 } from '../src/services/settings_lifecycle_utils.ts';
 
@@ -39,6 +43,40 @@ test('getProviderBadgeLabel returns deterministic labels for checking/setup/acti
       isActive: true
     }),
     'Active · Unavailable'
+  );
+});
+
+test('getSettingsProviderTone keeps active availability semantics explicit', () => {
+  assert.equal(
+    getSettingsProviderTone(undefined, true),
+    'neutral'
+  );
+  assert.equal(
+    getSettingsProviderTone({
+      provider: 'cloud',
+      label: 'Cloud',
+      available: false,
+      configured: true
+    }, true),
+    'error'
+  );
+  assert.equal(
+    getSettingsProviderTone({
+      provider: 'local',
+      label: 'Local',
+      available: true,
+      configured: true
+    }, true),
+    'success'
+  );
+  assert.equal(
+    getSettingsProviderTone({
+      provider: 'cloud',
+      label: 'Cloud',
+      available: false,
+      configured: false
+    }, false),
+    'warning'
   );
 });
 
@@ -91,6 +129,26 @@ test('getProviderSwitchState keeps checking state switch disabled while another 
     {
       disabled: true,
       label: 'Switch to Cloud'
+    }
+  );
+});
+
+test('getProviderSwitchState keeps active provider action locked regardless status payload', () => {
+  assert.deepEqual(
+    getProviderSwitchState({
+      targetProvider: 'local',
+      status: {
+        provider: 'local',
+        label: 'Local',
+        available: false,
+        configured: false
+      },
+      isActive: true,
+      switchingProvider: 'cloud'
+    }),
+    {
+      disabled: true,
+      label: 'Active'
     }
   );
 });
@@ -206,6 +264,10 @@ test('getSettingsModelStatus and label mapping are deterministic', () => {
     }),
     'installed'
   );
+  assert.equal(getSettingsModelStatusTone('active'), 'success');
+  assert.equal(getSettingsModelStatusTone('missing'), 'warning');
+  assert.equal(getSettingsModelStatusTone('available'), 'info');
+  assert.equal(getSettingsModelStatusTone('installed'), 'neutral');
 });
 
 test('getSettingsModelActionState keeps install/activate/delete actions explicit per status', () => {
@@ -417,4 +479,119 @@ test('deriveSettingsProviderFeedback returns deterministic retry copy when selec
     'Selected provider status is unavailable right now. Tap Retry.'
   );
   assert.equal(feedback.localFallbackWarning, null);
+});
+
+test('deriveSettingsProviderFeedback keeps local missing-model warning explicit when local provider is selected', () => {
+  const feedback = deriveSettingsProviderFeedback({
+    selectedProvider: 'local',
+    selectedProviderStatus: {
+      provider: 'local',
+      label: 'Local',
+      available: true,
+      configured: true
+    },
+    localProviderStatus: {
+      provider: 'local',
+      label: 'Local',
+      available: true,
+      configured: true
+    },
+    activeModelMissing: true,
+    hasActiveModel: true,
+    usableInstalledModelCount: 2
+  });
+
+  assert.equal(
+    feedback.loadError,
+    'Active local model file is missing. Reinstall it or choose another model below.'
+  );
+  assert.equal(feedback.localFallbackWarning, null);
+});
+
+test('getLocalModelSummary keeps fallback/active copy explicit across provider modes', () => {
+  const cloudMissingFallback = getLocalModelSummary({
+    activeProvider: 'cloud',
+    activeModelName: null,
+    activeModelMissing: false,
+    usableInstalledModelCount: 0
+  });
+  assert.equal(cloudMissingFallback.title, 'No local fallback selected');
+  assert.equal(cloudMissingFallback.statusLabel, 'Fallback Missing');
+  assert.equal(cloudMissingFallback.statusTone, 'warning');
+
+  const localMissingActive = getLocalModelSummary({
+    activeProvider: 'local',
+    activeModelName: null,
+    activeModelMissing: false,
+    usableInstalledModelCount: 2
+  });
+  assert.equal(localMissingActive.title, 'No active local model selected');
+  assert.equal(localMissingActive.statusLabel, 'Setup Required');
+
+  const activeReady = getLocalModelSummary({
+    activeProvider: 'local',
+    activeModelName: 'Llama 3.2 1B',
+    activeModelMissing: false,
+    activeModelSizeBytes: 2_400_000_000,
+    usableInstalledModelCount: 1
+  });
+  assert.equal(activeReady.statusLabel, 'Active');
+  assert.equal(activeReady.statusTone, 'success');
+  assert.ok(activeReady.body.includes('2.4 GB'));
+
+  const activeMissing = getLocalModelSummary({
+    activeProvider: 'cloud',
+    activeModelName: 'Llama 3.2 1B',
+    activeModelMissing: true,
+    usableInstalledModelCount: 1
+  });
+  assert.equal(activeMissing.statusLabel, 'Missing File');
+  assert.equal(activeMissing.statusTone, 'warning');
+});
+
+test('getDeleteModelSuccessMessage keeps delete-active-model outcomes deterministic', () => {
+  assert.equal(
+    getDeleteModelSuccessMessage({
+      activeProvider: 'local',
+      deletedWasActive: true,
+      fallbackActiveModelName: 'Llama 3.2 1B'
+    }),
+    'Llama 3.2 1B is now active.'
+  );
+
+  assert.equal(
+    getDeleteModelSuccessMessage({
+      activeProvider: 'cloud',
+      deletedWasActive: true,
+      fallbackActiveModelName: 'Llama 3.2 1B'
+    }),
+    'Llama 3.2 1B is now set as local fallback. Cloud provider remains active.'
+  );
+
+  assert.equal(
+    getDeleteModelSuccessMessage({
+      activeProvider: 'local',
+      deletedWasActive: true,
+      fallbackActiveModelName: null
+    }),
+    'No installed models remain. Install and activate a model to continue chatting locally.'
+  );
+
+  assert.equal(
+    getDeleteModelSuccessMessage({
+      activeProvider: 'cloud',
+      deletedWasActive: true,
+      fallbackActiveModelName: null
+    }),
+    'Local fallback model was removed. Cloud provider remains active, but offline mode now requires installing a local model.'
+  );
+
+  assert.equal(
+    getDeleteModelSuccessMessage({
+      activeProvider: 'cloud',
+      deletedWasActive: false,
+      fallbackActiveModelName: null
+    }),
+    'Model removed from this device.'
+  );
 });

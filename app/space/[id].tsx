@@ -27,8 +27,23 @@ import {
     ListRow,
     LoadingStateView,
     ScreenScaffold,
-    SectionHeader
+    SectionHeader,
+    StatusChip
 } from '../../src/components/ui';
+
+const toThreadSummarySubtitle = (thread: Thread): string => {
+    const summary = thread.summary_text?.trim();
+    if (summary && summary.length > 0) return summary;
+    return 'No summary yet. Open this thread to continue the conversation.';
+};
+
+const toThreadMeta = (thread: Thread): string => {
+    const summaryCount = thread.summary_message_count;
+    const summaryLabel = summaryCount > 0
+        ? `${summaryCount} summarized messages`
+        : 'No summarized messages';
+    return `${summaryLabel} • Created ${new Date(thread.created_at).toLocaleString()}`;
+};
 
 export default function SpaceDetailScreen() {
     const theme = useAppTheme();
@@ -94,6 +109,7 @@ export default function SpaceDetailScreen() {
 
     const openNewThread = () => {
         if (isEditing) return;
+        triggerHaptic('selection', reducedMotion);
         setNewThreadName('');
         setIsNewThreadOpen(true);
     };
@@ -117,7 +133,7 @@ export default function SpaceDetailScreen() {
             router.push(`/thread/${newId}`);
         } catch (createError) {
             console.error('Create thread failed:', createError);
-            Alert.alert('Could Not Create Thread', 'Please try again.');
+            Alert.alert('Thread Creation Unavailable', 'Could not create this thread right now. Please try again.');
             triggerHaptic('error', reducedMotion);
         } finally {
             setCreatingThread(false);
@@ -125,11 +141,13 @@ export default function SpaceDetailScreen() {
     };
 
     const toggleEdit = () => {
+        triggerHaptic('selection', reducedMotion);
         setIsEditing((prev) => !prev);
         setRenameTarget(null);
     };
 
     const openRename = (thread: Thread) => {
+        triggerHaptic('selection', reducedMotion);
         setRenameTarget(thread);
         setRenameValue(thread.title);
     };
@@ -154,7 +172,7 @@ export default function SpaceDetailScreen() {
             triggerHaptic('success', reducedMotion);
         } catch (renameError) {
             console.error('Rename failed:', renameError);
-            Alert.alert('Error', 'Could not rename thread.');
+            Alert.alert('Rename Unavailable', 'Could not rename this thread right now. Please try again.');
             triggerHaptic('error', reducedMotion);
         } finally {
             setSavingRename(false);
@@ -179,7 +197,7 @@ export default function SpaceDetailScreen() {
                             triggerHaptic('success', reducedMotion);
                         } catch (deleteError) {
                             console.error('Delete failed:', deleteError);
-                            Alert.alert('Error', 'Could not delete thread.');
+                            Alert.alert('Delete Unavailable', 'Could not delete this thread right now. Please try again.');
                             triggerHaptic('error', reducedMotion);
                         } finally {
                             setDeletingThreadId(null);
@@ -227,9 +245,17 @@ export default function SpaceDetailScreen() {
         <GroupedSection style={styles.threadCard}>
             <ListRow
                 title={item.title}
-                subtitle={new Date(item.created_at).toLocaleString()}
+                subtitle={toThreadSummarySubtitle(item)}
+                meta={toThreadMeta(item)}
                 onPress={() => router.push(`/thread/${item.id}`)}
-                disabled={isEditing}
+                disabled={isEditing || deletingThreadId === item.id}
+                leading={(
+                    <Ionicons
+                        name="chatbubble-ellipses-outline"
+                        size={18}
+                        color={theme.colors.tint.primary}
+                    />
+                )}
                 trailing={(
                     <Ionicons
                         name="chevron-forward"
@@ -269,6 +295,7 @@ export default function SpaceDetailScreen() {
                                 <TouchableOpacity
                                     onPress={openNewThread}
                                     style={styles.headerButton}
+                                    hitSlop={8}
                                     accessibilityRole="button"
                                     accessibilityLabel="Create thread"
                                     accessibilityHint="Opens the new thread sheet"
@@ -279,9 +306,11 @@ export default function SpaceDetailScreen() {
                             <TouchableOpacity
                                 onPress={toggleEdit}
                                 style={styles.headerButton}
+                                hitSlop={8}
                                 accessibilityRole="button"
                                 accessibilityLabel={isEditing ? 'Done editing threads' : 'Edit threads'}
                                 accessibilityHint={isEditing ? 'Stops editing mode' : 'Shows rename and delete controls'}
+                                accessibilityState={{ selected: isEditing }}
                             >
                                 <Ionicons
                                     name={isEditing ? 'checkmark-circle' : 'ellipsis-horizontal-circle'}
@@ -312,12 +341,23 @@ export default function SpaceDetailScreen() {
                                 />
                             )}
                         />
+                        {threads.length > 0 && (
+                            <GroupedSection style={styles.summaryCard}>
+                                <View style={styles.summaryRow}>
+                                    <StatusChip label={`${threads.length} threads`} tone="info" />
+                                    {isEditing && <StatusChip label="Editing" tone="warning" />}
+                                </View>
+                            </GroupedSection>
+                        )}
                         {!!error && (
                             <InlineBanner
                                 tone="warning"
                                 message={error}
                                 actionLabel="Retry"
-                                onActionPress={loadData}
+                                onActionPress={() => {
+                                    triggerHaptic('selection', reducedMotion);
+                                    loadData();
+                                }}
                             />
                         )}
                         {loading && threads.length > 0 && (
@@ -455,7 +495,11 @@ const styles = StyleSheet.create({
         marginRight: 6
     },
     headerButton: {
-        marginLeft: 10
+        marginLeft: 10,
+        minWidth: 40,
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     listContent: {
         paddingHorizontal: 14,
@@ -464,6 +508,15 @@ const styles = StyleSheet.create({
     },
     headerBlock: {
         marginBottom: 12,
+        gap: 8
+    },
+    summaryCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 10
+    },
+    summaryRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
         gap: 8
     },
     threadCard: {

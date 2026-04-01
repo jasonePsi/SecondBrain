@@ -47,8 +47,11 @@ export function SearchField({
             {value.length > 0 && !!onClear && (
                 <TouchableOpacity
                     onPress={onClear}
+                    style={styles.clearButton}
                     accessibilityRole="button"
                     accessibilityLabel="Clear search query"
+                    accessibilityHint="Clears the current text and results"
+                    hitSlop={6}
                 >
                     <Ionicons name="close-circle" size={18} color={theme.colors.text.tertiary} />
                 </TouchableOpacity>
@@ -76,5 +79,11 @@ const styles = StyleSheet.create({
     },
     spinner: {
         marginRight: 6
+    },
+    clearButton: {
+        minWidth: 32,
+        minHeight: 32,
+        alignItems: 'center',
+        justifyContent: 'center'
     }
 });

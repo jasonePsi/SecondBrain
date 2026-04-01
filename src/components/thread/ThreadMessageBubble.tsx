@@ -25,7 +25,9 @@ export function ThreadMessageBubble({
     const theme = useAppTheme();
     const reducedMotion = useReducedMotion();
     const isUser = message.role === 'user';
+    const isSystem = message.role === 'system';
     const highlightProgress = useRef(new Animated.Value(highlighted ? 1 : 0)).current;
+    const roleLabel = isUser ? 'You' : (isSystem ? 'System' : 'Assistant');
 
     useEffect(() => {
         if (highlighted) {
@@ -61,21 +63,42 @@ export function ThreadMessageBubble({
     });
 
     return (
-        <View style={[styles.wrapper, isUser ? styles.userWrapper : styles.assistantWrapper]}>
+        <View
+            style={[
+                styles.wrapper,
+                isUser
+                    ? styles.userWrapper
+                    : isSystem
+                        ? styles.systemWrapper
+                        : styles.assistantWrapper
+            ]}
+        >
             <Animated.View
                 style={[
                     styles.bubble,
                     {
                         transform: [{ scale: animatedScale }],
-                        backgroundColor: isUser ? theme.colors.tint.primary : theme.colors.background.surface,
-                        borderColor: isUser ? theme.colors.tint.primary : theme.colors.separator.subtle
+                        backgroundColor: isUser
+                            ? theme.colors.tint.primary
+                            : isSystem
+                                ? theme.colors.background.grouped
+                                : theme.colors.background.surface,
+                        borderColor: isUser
+                            ? theme.colors.tint.primary
+                            : isSystem
+                                ? theme.colors.separator.strong
+                                : theme.colors.separator.subtle
                     },
-                    isUser ? styles.userBubble : styles.assistantBubble,
+                    isUser
+                        ? styles.userBubble
+                        : isSystem
+                            ? styles.systemBubble
+                            : styles.assistantBubble,
                     highlighted && { borderColor: theme.colors.tint.primary, borderWidth: 2 }
                 ]}
                 accessible
                 accessibilityRole="text"
-                accessibilityLabel={`${isUser ? 'You' : 'Assistant'} at ${formatMessageTime(message.created_at)}. ${displayText}`}
+                accessibilityLabel={`${roleLabel} at ${formatMessageTime(message.created_at)}. ${displayText}`}
             >
                 <Animated.View
                     pointerEvents="none"
@@ -89,8 +112,18 @@ export function ThreadMessageBubble({
                 />
                 <Text
                     style={[
-                        isUser ? styles.userText : styles.assistantText,
-                        { color: isUser ? theme.colors.text.inverse : theme.colors.text.primary }
+                        isUser
+                            ? styles.userText
+                            : isSystem
+                                ? styles.systemText
+                                : styles.assistantText,
+                        {
+                            color: isUser
+                                ? theme.colors.text.inverse
+                                : isSystem
+                                    ? theme.colors.text.secondary
+                                    : theme.colors.text.primary
+                        }
                     ]}
                 >
                     {displayText}
@@ -98,10 +131,14 @@ export function ThreadMessageBubble({
                 <Text
                     style={[
                         styles.bubbleMeta,
-                        { color: isUser ? 'rgba(255,255,255,0.86)' : theme.colors.text.tertiary }
+                        {
+                            color: isUser
+                                ? 'rgba(255,255,255,0.86)'
+                                : theme.colors.text.tertiary
+                        }
                     ]}
                 >
-                    {isUser ? 'You' : 'Assistant'} · {formatMessageTime(message.created_at)}
+                    {roleLabel} · {formatMessageTime(message.created_at)}
                 </Text>
             </Animated.View>
         </View>
@@ -120,6 +157,9 @@ const styles = StyleSheet.create({
     assistantWrapper: {
         justifyContent: 'flex-start'
     },
+    systemWrapper: {
+        justifyContent: 'center'
+    },
     bubble: {
         maxWidth: '86%',
         paddingHorizontal: 14,
@@ -134,6 +174,11 @@ const styles = StyleSheet.create({
         borderBottomLeftRadius: 6,
         borderWidth: 1,
     },
+    systemBubble: {
+        borderRadius: 12,
+        borderWidth: 1,
+        maxWidth: '94%'
+    },
     highlightRing: {
         ...StyleSheet.absoluteFillObject,
         borderWidth: 2,
@@ -146,6 +191,10 @@ const styles = StyleSheet.create({
     assistantText: {
         fontSize: 16,
         lineHeight: 22
+    },
+    systemText: {
+        fontSize: 14,
+        lineHeight: 20
     },
     bubbleMeta: {
         fontSize: 11,

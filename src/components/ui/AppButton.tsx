@@ -14,6 +14,7 @@ type AppButtonProps = {
     size?: AppButtonSize;
     disabled?: boolean;
     loading?: boolean;
+    accessibilityHint?: string;
 };
 
 export function AppButton({
@@ -22,7 +23,8 @@ export function AppButton({
     variant = 'primary',
     size = 'md',
     disabled,
-    loading
+    loading,
+    accessibilityHint
 }: AppButtonProps) {
     const theme = useAppTheme();
     const reducedMotion = useReducedMotion();
@@ -50,7 +52,10 @@ export function AppButton({
             onPress={onPress}
             accessibilityRole="button"
             accessibilityLabel={label}
+            accessibilityHint={accessibilityHint}
             accessibilityState={{ disabled: isDisabled, busy: !!loading }}
+            hitSlop={6}
+            pressRetentionOffset={{ top: 8, right: 8, bottom: 8, left: 8 }}
             style={({ pressed }) => [
                 styles.base,
                 size === 'sm' ? styles.small : styles.medium,
@@ -83,7 +88,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14
     },
     small: {
-        minHeight: 36,
+        minHeight: 38,
         paddingHorizontal: 10
     },
     label: {

@@ -49,20 +49,6 @@ export type AppTheme = {
     colors: AppThemeColors;
 };
 
-export type LegacyColors = {
-    primary: string;
-    background: string;
-    card: string;
-    text: string;
-    secondaryText: string;
-    textSecondary: string;
-    border: string;
-    notification: string;
-    tint: string;
-    tabIconDefault: string;
-    tabIconSelected: string;
-};
-
 const LIGHT_COLORS: AppThemeColors = {
     background: {
         base: '#F2F2F7',
@@ -165,20 +151,4 @@ export const getSystemTheme = (): AppTheme => {
 export const useAppTheme = (): AppTheme => {
     const scheme = useColorScheme();
     return getTheme(scheme);
-};
-
-export const toLegacyColors = (theme: AppTheme): LegacyColors => {
-    return {
-        primary: theme.colors.tint.primary,
-        background: theme.colors.background.base,
-        card: theme.colors.background.surface,
-        text: theme.colors.text.primary,
-        secondaryText: theme.colors.text.tertiary,
-        textSecondary: theme.colors.text.tertiary,
-        border: theme.colors.separator.subtle,
-        notification: theme.colors.status.error,
-        tint: theme.colors.tint.primary,
-        tabIconDefault: theme.colors.text.tertiary,
-        tabIconSelected: theme.colors.tint.primary
-    };
 };

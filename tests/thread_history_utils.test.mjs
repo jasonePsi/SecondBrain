@@ -69,6 +69,23 @@ test('buildHistorySnapshotFromNewest normalizes invalid totals to message length
   assert.equal(snapshot.hasOlderMessages, false);
 });
 
+test('buildHistorySnapshotFromNewest de-duplicates repeated ids and keeps deterministic order', () => {
+  const snapshot = buildHistorySnapshotFromNewest(
+    [
+      { id: 'm2', created_at: 2000 },
+      { id: 'm1', created_at: 1000 },
+      { id: 'm2', created_at: 2000 },
+      { id: 'm3', created_at: 3000 }
+    ],
+    10
+  );
+
+  assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3']);
+  assert.equal(snapshot.loadedMessageCount, 3);
+  assert.equal(snapshot.totalMessageCount, 10);
+  assert.equal(snapshot.hasOlderMessages, true);
+});
+
 test('mergeOlderHistoryBatch prepends older rows and de-duplicates overlap deterministically', () => {
   const snapshot = mergeOlderHistoryBatch({
     existingMessages: [
@@ -105,6 +122,25 @@ test('mergeOlderHistoryBatch normalizes invalid count inputs without producing N
 
   assert.equal(snapshot.totalMessageCount, 3);
   assert.equal(snapshot.loadedMessageCount, 3);
+  assert.equal(snapshot.hasOlderMessages, false);
+});
+
+test('mergeOlderHistoryBatch clamps loaded count to total count when incoming state is oversized', () => {
+  const snapshot = mergeOlderHistoryBatch({
+    existingMessages: [
+      { id: 'm3', created_at: 3000 },
+      { id: 'm4', created_at: 4000 }
+    ],
+    olderBatch: [
+      { id: 'm1', created_at: 1000 },
+      { id: 'm2', created_at: 2000 }
+    ],
+    loadedMessageCount: 999,
+    totalMessageCount: 3
+  });
+
+  assert.equal(snapshot.totalMessageCount, 4);
+  assert.equal(snapshot.loadedMessageCount, 4);
   assert.equal(snapshot.hasOlderMessages, false);
 });
 
@@ -210,6 +246,22 @@ test('resolveJumpBehavior waits while initial or older history is still loading'
     loadingOlderMessages: true,
     hasOlderMessages: true
   }), { kind: 'wait' });
+});
+
+test('resolveJumpBehavior prioritizes immediate jump when target is already loaded', () => {
+  const messages = [
+    { id: 'm1', created_at: 1000 },
+    { id: 'm2', created_at: 2000 }
+  ];
+
+  assert.deepEqual(resolveJumpBehavior({
+    messages,
+    targetMessageId: 'm2',
+    lastJumpedMessageId: null,
+    loadingInitialMessages: true,
+    loadingOlderMessages: true,
+    hasOlderMessages: true
+  }), { kind: 'jump', index: 1 });
 });
 
 test('resolveJumpBehavior returns none when no target message id is provided', () => {

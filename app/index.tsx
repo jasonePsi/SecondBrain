@@ -26,7 +26,9 @@ const resolveInitialRoute = async (): Promise<InitialRoute> => {
                     reason: formatProviderStatusReason(cloudStatus, {
                         includeDiagnostics: true
                     }),
-                    configured: cloudStatus.configured
+                    configured: cloudStatus.configured,
+                    detailCode: cloudStatus.detailCode,
+                    requestId: cloudStatus.requestId
                 });
             }
             return resolveCloudProviderInitialRoute(cloudStatus);
@@ -76,6 +78,8 @@ const resolveInitialRoute = async (): Promise<InitialRoute> => {
         reason: formatProviderStatusReason(localStatus, {
             includeDiagnostics: true
         }),
+        detailCode: localStatus.detailCode,
+        requestId: localStatus.requestId,
         usableInstalledModelCount: usableInstalledModels.length
     });
     return resolveLocalProviderInitialRoute({

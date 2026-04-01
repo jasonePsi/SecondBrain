@@ -25,9 +25,10 @@ export function CaptureFAB({ onPress, onLongPress, style, label = 'New Space' }:
             onPress={onPress}
             onLongPress={onLongPress}
             activeOpacity={0.8}
+            hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel={label}
-            accessibilityHint="Creates a new item"
+            accessibilityHint="Creates a new space"
         >
             <View style={[styles.iconWrap, { backgroundColor: theme.colors.tint.primary }]}>
                 <Ionicons name="add" size={20} color={theme.colors.text.inverse} />

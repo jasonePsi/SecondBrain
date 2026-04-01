@@ -124,7 +124,7 @@ export default function BrainScreen() {
         } catch (err: any) {
             console.error('Brain refresh failed:', err);
             if (canApply()) {
-                setError('Memory is temporarily unavailable. Please try again.');
+                setError('Memory view is temporarily unavailable. Please try again.');
             }
             if (options?.feedback) {
                 triggerHaptic('error', reducedMotion);
@@ -187,9 +187,11 @@ export default function BrainScreen() {
                         <TouchableOpacity
                             onPress={() => loadSnapshot({ feedback: true })}
                             style={styles.refreshButton}
+                            hitSlop={8}
                             accessibilityRole="button"
                             accessibilityLabel="Refresh memory snapshot"
                             accessibilityHint="Reloads entities, facts, and reminders"
+                            accessibilityState={{ busy: loading }}
                         >
                             <Ionicons name="refresh" size={20} color={theme.colors.tint.primary} />
                         </TouchableOpacity>
@@ -200,7 +202,7 @@ export default function BrainScreen() {
                 <View style={styles.headerBlock}>
                     <SectionHeader
                         title="Structured Memory"
-                        subtitle="Entities, facts, and open reminders captured from your conversations."
+                        subtitle="A live snapshot of entities, facts, and open reminders from your conversations."
                     />
                     <GroupedSection style={styles.summaryCard}>
                         <View style={styles.summaryRow}>
@@ -210,7 +212,7 @@ export default function BrainScreen() {
                         </View>
                         {!!snapshot?.loadedAt && (
                             <Text style={[styles.summaryMeta, { color: theme.colors.text.tertiary }]}>
-                                Last refreshed {formatTimestamp(snapshot.loadedAt)}
+                                Updated {formatTimestamp(snapshot.loadedAt)}
                             </Text>
                         )}
                     </GroupedSection>
@@ -250,14 +252,14 @@ export default function BrainScreen() {
                     <>
                         <BrainSection<BrainEntityCard>
                             title="Entities"
-                            subtitle="People, places, and named things."
+                            subtitle="People, places, organizations, and named things."
                             items={entities}
                             emptyCopy="No entities yet. Keep chatting and this section will fill in."
                             renderRow={(entity) => (
                                 <ListRow
                                     title={entity.name}
-                                    subtitle={`${entity.type} • ${entity.scopeLabel}`}
-                                    meta={`Captured ${formatTimestamp(entity.createdAt)}`}
+                                    subtitle={entity.type}
+                                    meta={`${entity.scopeLabel} • Captured ${formatTimestamp(entity.createdAt)}`}
                                     onPress={entity.route ? () => navigateTo(entity.route) : undefined}
                                     leading={(
                                         <Ionicons
@@ -279,14 +281,14 @@ export default function BrainScreen() {
 
                         <BrainSection<BrainFactCard>
                             title="Facts"
-                            subtitle="Key details you asked the assistant to remember."
+                            subtitle="Concrete details captured so they are easy to recall."
                             items={facts}
                             emptyCopy="No facts captured yet. Mention concrete details in a thread."
                             renderRow={(fact) => (
                                 <ListRow
                                     title={fact.key}
                                     subtitle={`${fact.value}${fact.unit ? ` ${fact.unit}` : ''}`}
-                                    meta={`${fact.scopeLabel} • Updated ${formatTimestamp(fact.effectiveAt)}`}
+                                    meta={`Updated ${formatTimestamp(fact.effectiveAt)} • ${fact.scopeLabel}`}
                                     onPress={fact.route ? () => navigateTo(fact.route) : undefined}
                                     leading={(
                                         <Ionicons
@@ -308,7 +310,7 @@ export default function BrainScreen() {
 
                         <BrainSection<BrainActionCard>
                             title="Open Actions"
-                            subtitle="Reminders and tasks waiting on you."
+                            subtitle="Reminders and tasks waiting on action."
                             items={actions}
                             emptyCopy="No open reminders or tasks right now."
                             tone="warning"
@@ -354,7 +356,11 @@ export default function BrainScreen() {
 
 const styles = StyleSheet.create({
     refreshButton: {
-        marginRight: 12
+        marginRight: 12,
+        minWidth: 40,
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     content: {
         paddingHorizontal: 14,

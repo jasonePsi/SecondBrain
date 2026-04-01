@@ -12,6 +12,7 @@ import { Space, SpaceRepo } from '../../src/repositories/space_repo';
 import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
 import { useAppTheme } from '../../src/theme/theme';
 import { runLayoutFeedback, triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
+import { deriveSearchUiState } from '../../src/services/search_ui_state_utils';
 import {
     AppButton,
     EmptyStateView,
@@ -63,12 +64,6 @@ const rankByStartsWith = <T extends { name?: string; title?: string }>(
     });
 };
 
-const toMessageTitle = (message: MessageSearchHit): string => {
-    const text = message.text.replace(/\s+/g, ' ').trim();
-    if (text.length <= 72) return text;
-    return `${text.slice(0, 71).trimEnd()}…`;
-};
-
 const formatResultTimestamp = (value: number): string => {
     return new Date(value).toLocaleString();
 };
@@ -100,10 +95,6 @@ export default function SearchScreen() {
     const [searchNonce, setSearchNonce] = useState(0);
     const searchTokenRef = useRef(0);
     const resultsQueryRef = useRef('');
-    const normalizedQuery = query.trim();
-    const isQuerySettled = normalizedQuery === debouncedQuery;
-    const hasStableResults = isQuerySettled && resultsQuery === normalizedQuery;
-    const showError = !!error && normalizedQuery.length > 0 && hasStableResults;
 
     const cancelInFlightSearch = () => {
         searchTokenRef.current += 1;
@@ -198,13 +189,13 @@ export default function SearchScreen() {
             nextSections.push({
                 type: 'space',
                 title: 'Spaces',
-                subtitle: 'Collections of related threads.',
+                subtitle: 'Collections you can open directly.',
                 data: spaces.map((space) => ({
                     type: 'space',
                     id: space.id,
                     title: space.name,
                     subtitle: 'Space',
-                    meta: 'Open space',
+                    meta: `Created ${formatResultTimestamp(space.created_at)}`,
                     navigateTo: `/space/${space.id}`
                 }))
             });
@@ -214,13 +205,13 @@ export default function SearchScreen() {
             nextSections.push({
                 type: 'thread',
                 title: 'Threads',
-                subtitle: 'Conversations where the match appears.',
+                subtitle: 'Conversation titles that matched your query.',
                 data: threads.map((thread) => ({
                     type: 'thread',
                     id: thread.id,
                     title: thread.title,
                     subtitle: 'Thread',
-                    meta: 'Open thread',
+                    meta: `Created ${formatResultTimestamp(thread.created_at)}`,
                     navigateTo: `/thread/${thread.id}`
                 }))
             });
@@ -230,13 +221,13 @@ export default function SearchScreen() {
             nextSections.push({
                 type: 'message',
                 title: 'Messages',
-                subtitle: 'Jump directly into the matched message context.',
+                subtitle: 'Jump directly to the matched message context.',
                 data: messages.map((message) => ({
                     type: 'message',
                     id: message.id,
-                    title: messageThreadTitles[message.thread_id] || 'Thread',
-                    subtitle: cleanSnippet(message.snippet) || toMessageTitle(message),
-                    meta: `${toRoleLabel(message.role)} • ${formatResultTimestamp(message.created_at)} • Opens at this match`,
+                    title: cleanSnippet(message.snippet) || 'Message match',
+                    subtitle: `Thread: ${messageThreadTitles[message.thread_id] || 'Thread'}`,
+                    meta: `${toRoleLabel(message.role)} • ${formatResultTimestamp(message.created_at)} • Opens at match`,
                     navigateTo: `/thread/${message.thread_id}?messageId=${encodeURIComponent(message.id)}`
                 }))
             });
@@ -244,6 +235,16 @@ export default function SearchScreen() {
 
         return nextSections;
     }, [spaces, threads, messages, messageThreadTitles]);
+
+    const totalResults = sections.reduce((sum, section) => sum + section.data.length, 0);
+    const uiState = deriveSearchUiState({
+        query,
+        debouncedQuery,
+        resultsQuery,
+        isSearching,
+        error,
+        sectionCount: sections.length
+    });
 
     const getIconForType = (
         type: SearchType
@@ -260,6 +261,7 @@ export default function SearchScreen() {
     };
 
     const clearQuery = () => {
+        triggerHaptic('selection', reducedMotion);
         cancelInFlightSearch();
         setQuery('');
         setDebouncedQuery('');
@@ -276,15 +278,10 @@ export default function SearchScreen() {
 
     const retrySearch = () => {
         if (!debouncedQuery) return;
+        triggerHaptic('selection', reducedMotion);
         cancelInFlightSearch();
         setSearchNonce((prev) => prev + 1);
     };
-
-    const totalResults = sections.reduce((sum, section) => sum + section.data.length, 0);
-    const showResultList = normalizedQuery.length > 0
-        && !showError
-        && hasStableResults
-        && sections.length > 0;
 
     const openResult = (item: SearchResult) => {
         triggerHaptic('selection', reducedMotion);
@@ -318,7 +315,7 @@ export default function SearchScreen() {
             <View style={styles.content}>
                 <SectionHeader
                     title="Search"
-                    subtitle="Find spaces, threads, and message context fast."
+                    subtitle="Find spaces, threads, and message context quickly."
                 />
                 <SearchField
                     value={query}
@@ -329,7 +326,7 @@ export default function SearchScreen() {
                     accessibilityLabel="Search across spaces, threads, and messages"
                 />
 
-                {showError && (
+                {uiState.showError && (
                     <>
                         <InlineBanner
                             tone="error"
@@ -337,54 +334,56 @@ export default function SearchScreen() {
                             actionLabel="Retry"
                             onActionPress={retrySearch}
                         />
-                        <View style={styles.errorActions}>
-                            <AppButton label="Retry" onPress={retrySearch} />
+                        <View style={styles.secondaryActions}>
                             <AppButton label="Clear" variant="secondary" onPress={clearQuery} />
                         </View>
                     </>
                 )}
 
-                {normalizedQuery.length > 0 && !isQuerySettled && (
+                {uiState.showTypingHint && (
                     <Text style={[styles.helperText, { color: theme.colors.text.tertiary }]}>
                         Keep typing to refine results…
                     </Text>
                 )}
-                {isSearching && debouncedQuery.length > 0 && isQuerySettled && (
+                {uiState.showSearchingHint && (
                     <Text style={[styles.helperText, { color: theme.colors.text.tertiary }]}>
-                        Searching for "{normalizedQuery}"…
+                        Searching for "{uiState.normalizedQuery}"…
                     </Text>
                 )}
-                {!!normalizedQuery && !isSearching && !showError && hasStableResults && (
+                {uiState.normalizedQuery.length > 0 && !uiState.showError && uiState.hasStableResults && (
                     <GroupedSection style={styles.querySummaryCard}>
                         <View style={styles.querySummaryRow}>
                             <Text
                                 numberOfLines={1}
                                 style={[styles.querySummaryText, { color: theme.colors.text.secondary }]}
                             >
-                                Results for "{normalizedQuery}"
+                                Results for "{uiState.normalizedQuery}"
                             </Text>
                             <StatusChip label={`${totalResults}`} tone="info" />
+                        </View>
+                        <View style={styles.summaryActions}>
+                            <AppButton size="sm" label="Clear Search" variant="plain" onPress={clearQuery} />
                         </View>
                     </GroupedSection>
                 )}
 
-                {!normalizedQuery && (
+                {uiState.showIdlePrompt && (
                     <EmptyStateView
                         title="Search your second brain"
                         message="Try names, topics, reminders, or phrases from messages."
                     />
                 )}
 
-                {!!normalizedQuery && !isSearching && sections.length === 0 && hasStableResults && !error && (
+                {uiState.showNoResults && (
                     <EmptyStateView
                         title="No results"
-                        message={`No matches for "${normalizedQuery}". Try a broader phrase.`}
+                        message={`No matches for "${uiState.normalizedQuery}". Try a broader phrase.`}
                         primaryActionLabel="Clear search"
                         onPrimaryAction={clearQuery}
                     />
                 )}
 
-                {showResultList && (
+                {uiState.showResultList && (
                     <ScrollView
                         style={styles.resultsScroll}
                         contentContainerStyle={styles.listContent}
@@ -437,7 +436,7 @@ const styles = StyleSheet.create({
         marginBottom: 2,
         fontSize: 12
     },
-    errorActions: {
+    secondaryActions: {
         marginTop: 8,
         flexDirection: 'row',
         gap: 8
@@ -456,6 +455,10 @@ const styles = StyleSheet.create({
         flex: 1,
         fontSize: 13,
         fontWeight: '600'
+    },
+    summaryActions: {
+        marginTop: 6,
+        flexDirection: 'row'
     },
     resultsScroll: {
         flex: 1

@@ -48,6 +48,24 @@ export const ThreadRepo = {
         );
         return ((res.rows as any[]) || []).map(normalizeThreadRow);
     },
+    countBySpaceIds: async (spaceIds: string[]): Promise<Record<string, number>> => {
+        if (spaceIds.length === 0) return {};
+        const uniqueIds = [...new Set(spaceIds)];
+        const placeholders = uniqueIds.map(() => '?').join(', ');
+        const res = await db.execute(
+            `SELECT space_id, COUNT(*) as thread_count
+             FROM threads
+             WHERE space_id IN (${placeholders})
+             GROUP BY space_id`,
+            uniqueIds
+        );
+
+        const counts: Record<string, number> = {};
+        ((res.rows as any[]) || []).forEach((row) => {
+            counts[row.space_id] = Number(row.thread_count || 0);
+        });
+        return counts;
+    },
     search: async (query: string): Promise<Thread[]> => {
         const res = await db.execute('SELECT * FROM threads WHERE title LIKE ? ORDER BY created_at DESC', [`%${query}%`]);
         return ((res.rows as any[]) || []).map(normalizeThreadRow);

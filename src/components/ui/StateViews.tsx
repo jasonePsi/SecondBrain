@@ -15,7 +15,13 @@ type BaseStateProps = {
 export function LoadingStateView({ title, message }: Pick<BaseStateProps, 'title' | 'message'>) {
     const theme = useAppTheme();
     return (
-        <View style={styles.center}>
+        <View
+            style={styles.center}
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityLabel={message ? `${title}. ${message}` : title}
+            accessibilityLiveRegion="polite"
+        >
             <ActivityIndicator size="small" color={theme.colors.tint.primary} />
             <Text style={[styles.title, { color: theme.colors.text.primary }]}>{title}</Text>
             {!!message && <Text style={[styles.message, { color: theme.colors.text.secondary }]}>{message}</Text>}
@@ -31,7 +37,12 @@ export function EmptyStateView({
 }: BaseStateProps) {
     const theme = useAppTheme();
     return (
-        <View style={styles.center}>
+        <View
+            style={styles.center}
+            accessible
+            accessibilityRole="text"
+            accessibilityLabel={message ? `${title}. ${message}` : title}
+        >
             <Text style={[styles.title, { color: theme.colors.text.primary }]}>{title}</Text>
             {!!message && <Text style={[styles.message, { color: theme.colors.text.secondary }]}>{message}</Text>}
             {!!primaryActionLabel && !!onPrimaryAction && (
@@ -51,7 +62,13 @@ export function ErrorStateView({
 }: BaseStateProps) {
     const theme = useAppTheme();
     return (
-        <View style={styles.center}>
+        <View
+            style={styles.center}
+            accessible
+            accessibilityRole="alert"
+            accessibilityLabel={message ? `${title}. ${message}` : title}
+            accessibilityLiveRegion="assertive"
+        >
             <Text style={[styles.title, { color: theme.colors.status.error }]}>{title}</Text>
             {!!message && <Text style={[styles.message, { color: theme.colors.text.secondary }]}>{message}</Text>}
             <View style={styles.actionRow}>

@@ -60,6 +60,11 @@ Notes:
   - app: `SECOND_BRAIN_DEBUG_LOGS=1` (or `EXPO_PUBLIC_DEBUG_LOGS=1`)
   - proxy: `OPENAI_PROXY_DEBUG_LOGS=true`
 
+## Redesign Status
+
+- Product/design direction: `docs/redesign-plan.md`
+- Phase-by-phase handoff log and current state: `docs/redesign-progress.md`
+
 ## Dependency Maintenance (Release-Safe)
 
 SecondBrain has two dependency surfaces that must be triaged separately:

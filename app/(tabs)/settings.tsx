@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-    ActivityIndicator,
     Alert,
     ScrollView,
     StyleSheet,
@@ -18,13 +17,17 @@ import type { AIProviderStatus, AIProviderType } from '../../src/services/LLMSer
 import { ModelManager } from '../../src/services/ModelManager';
 import { formatProviderStatusReason } from '../../src/services/provider_status_copy_utils';
 import {
+    getDeleteModelSuccessMessage,
     canAutoRepairLocalProviderSwitch,
     deriveSettingsProviderFeedback,
     getProviderBadgeLabel,
+    getLocalModelSummary,
     getProviderSwitchState,
     getSettingsModelActionState,
     getSettingsModelStatus,
     getSettingsModelStatusLabel,
+    getSettingsModelStatusTone,
+    getSettingsProviderTone,
     resolveLocalAutoRepairCandidateModelId
 } from '../../src/services/settings_lifecycle_utils';
 import { useAppTheme } from '../../src/theme/theme';
@@ -37,6 +40,9 @@ import {
     SectionHeader,
     StatusChip
 } from '../../src/components/ui';
+import { SettingsActiveModelCard } from '../../src/components/settings/SettingsActiveModelCard';
+import { SettingsModelCard } from '../../src/components/settings/SettingsModelCard';
+import { SettingsProviderCard } from '../../src/components/settings/SettingsProviderCard';
 import { runLayoutFeedback, triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
 
 type ProviderOption = {
@@ -75,27 +81,6 @@ const formatBatteryImpact = (impact: ModelConfig['batteryImpact']): string => {
     if (impact === 'medium') return 'Balanced impact';
     if (impact === 'high') return 'High impact';
     return 'Unknown impact';
-};
-
-const providerIconName = (provider: AIProviderType): React.ComponentProps<typeof Ionicons>['name'] => {
-    return provider === 'cloud' ? 'cloud-outline' : 'phone-portrait-outline';
-};
-
-const getProviderTone = (
-    status: AIProviderStatus | undefined,
-    isActive: boolean
-): 'success' | 'warning' | 'error' | 'neutral' => {
-    if (!status) return 'neutral';
-    if (isActive && !status.available) return 'error';
-    if (isActive && status.available) return 'success';
-    if (!status.configured) return 'warning';
-    return status.available ? 'neutral' : 'warning';
-};
-
-const getModelStatusTone = (status: ReturnType<typeof getSettingsModelStatus>): 'neutral' | 'success' | 'warning' => {
-    if (status === 'active') return 'success';
-    if (status === 'missing') return 'warning';
-    return 'neutral';
 };
 
 export default function SettingsScreen() {
@@ -211,6 +196,11 @@ export default function SettingsScreen() {
         }
     };
 
+    const handleRefreshSettings = () => {
+        triggerHaptic('selection', reducedMotion);
+        loadData();
+    };
+
     const getProviderStatus = (provider: AIProviderType): AIProviderStatus | undefined => {
         return providerStatuses.find((item) => item.provider === provider);
     };
@@ -230,6 +220,7 @@ export default function SettingsScreen() {
 
     const handleSwitchProvider = async (provider: AIProviderType) => {
         try {
+            triggerHaptic('selection', reducedMotion);
             setSwitchingProvider(provider);
             const runtimeState = LLMService.getRuntimeState();
             const latestStatus = await LLMService.getProviderStatus(provider);
@@ -289,7 +280,7 @@ export default function SettingsScreen() {
                 triggerHaptic('success', reducedMotion);
             }
         } catch (error: any) {
-            Alert.alert('Provider Unavailable', error.message || 'Could not switch provider.');
+            Alert.alert('Provider Unavailable', error.message || 'Could not switch provider right now.');
             triggerHaptic('error', reducedMotion);
         } finally {
             await loadData();
@@ -315,7 +306,7 @@ export default function SettingsScreen() {
             );
             await loadData();
         } catch (error: any) {
-            Alert.alert('Download Failed', error.message || 'Failed to download model');
+            Alert.alert('Download Unavailable', error.message || 'Could not download this model right now.');
             triggerHaptic('error', reducedMotion);
         } finally {
             setDownloading(null);
@@ -344,7 +335,7 @@ export default function SettingsScreen() {
             }
             await loadData();
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to switch model');
+            Alert.alert('Model Activation Unavailable', error.message || 'Could not activate this model right now.');
             triggerHaptic('error', reducedMotion);
         }
     };
@@ -364,30 +355,22 @@ export default function SettingsScreen() {
                             triggerHaptic('warning', reducedMotion);
                             const result = await ModelManager.deleteModel(modelId);
                             await LLMService.release();
-
-                            if (result.deletedWasActive && result.fallbackActiveModelId) {
-                                const fallbackName = getModelById(result.fallbackActiveModelId)?.name || result.fallbackActiveModelId;
-                                Alert.alert(
-                                    'Model Deleted',
-                                    activeProvider === 'cloud'
-                                        ? `${fallbackName} is now set as local fallback. Cloud provider remains active.`
-                                        : `${fallbackName} is now active.`
-                                );
-                            } else if (result.deletedWasActive) {
-                                Alert.alert(
-                                    'Model Deleted',
-                                    activeProvider === 'cloud'
-                                        ? 'Local fallback model was removed. Cloud provider remains active, but offline mode now requires installing a local model.'
-                                        : 'No installed models remain. Install and activate a model to continue chatting locally.'
-                                );
-                            } else {
-                                Alert.alert('Model Deleted', 'Model removed from this device.');
-                            }
+                            const fallbackName = result.fallbackActiveModelId
+                                ? (getModelById(result.fallbackActiveModelId)?.name || result.fallbackActiveModelId)
+                                : null;
+                            Alert.alert(
+                                'Model Deleted',
+                                getDeleteModelSuccessMessage({
+                                    activeProvider,
+                                    deletedWasActive: result.deletedWasActive,
+                                    fallbackActiveModelName: fallbackName
+                                })
+                            );
                             triggerHaptic('success', reducedMotion);
 
                             await loadData();
                         } catch (error: any) {
-                            Alert.alert('Error', error.message || 'Failed to delete model');
+                            Alert.alert('Delete Unavailable', error.message || 'Could not delete this model right now.');
                             triggerHaptic('error', reducedMotion);
                         }
                     }
@@ -410,6 +393,16 @@ export default function SettingsScreen() {
     const usableInstalledModels = installedModels.filter((model) => usableInstalledModelIds.has(model.model_id));
     const missingModelCount = installedModels.length - usableInstalledModels.length;
     const totalStorageUsed = usableInstalledModels.reduce((total, model) => total + model.size_bytes, 0);
+    const activeModelName = activeModel
+        ? (getModelById(activeModel.model_id)?.name || activeModel.model_id)
+        : null;
+    const localModelSummary = getLocalModelSummary({
+        activeProvider,
+        activeModelName,
+        activeModelMissing,
+        activeModelSizeBytes: activeModel?.size_bytes,
+        usableInstalledModelCount: usableInstalledModels.length
+    });
 
     if (loading) {
         return (
@@ -429,11 +422,13 @@ export default function SettingsScreen() {
                     title: 'Settings',
                     headerRight: () => (
                         <TouchableOpacity
-                            onPress={loadData}
+                            onPress={handleRefreshSettings}
                             style={styles.refreshButton}
+                            hitSlop={8}
                             accessibilityRole="button"
                             accessibilityLabel="Refresh provider and model status"
                             accessibilityHint="Rechecks provider availability and model install states"
+                            accessibilityState={{ busy: loading }}
                         >
                             <Ionicons name="refresh" size={20} color={theme.colors.tint.primary} />
                         </TouchableOpacity>
@@ -451,7 +446,7 @@ export default function SettingsScreen() {
                         tone="warning"
                         message={loadError}
                         actionLabel="Retry"
-                        onActionPress={loadData}
+                        onActionPress={handleRefreshSettings}
                     />
                 )}
 
@@ -476,69 +471,27 @@ export default function SettingsScreen() {
                             allowUnavailableSwitch,
                             unavailableSwitchLabel: allowUnavailableSwitch ? 'Fix and Switch to Local' : undefined
                         });
-
+                        const showStatusMessage = !!status && (!status.available || !status.configured || !!status.reason);
                         return (
-                            <GroupedSection key={option.id} style={styles.providerCard}>
-                                <View style={styles.providerTopRow}>
-                                    <View style={styles.providerTitleRow}>
-                                        <Ionicons
-                                            name={providerIconName(option.id)}
-                                            size={18}
-                                            color={theme.colors.tint.primary}
-                                        />
-                                        <Text style={[styles.providerName, { color: theme.colors.text.primary }]}>
-                                            {option.name}
-                                        </Text>
-                                    </View>
-                                    <StatusChip
-                                        label={getProviderBadgeLabel({ status, isActive })}
-                                        tone={getProviderTone(status, isActive)}
-                                    />
-                                </View>
-
-                                <Text style={[styles.providerDescription, { color: theme.colors.text.secondary }]}>
-                                    {option.description}
-                                </Text>
-
-                                {!!option.privacyHint && (
-                                    <Text style={[styles.providerHint, { color: theme.colors.text.tertiary }]}>
-                                        {option.privacyHint}
-                                    </Text>
-                                )}
-
-                                {!status && (
-                                    <InlineBanner
-                                        tone="warning"
-                                        message="Provider status unavailable. Refresh to re-check."
-                                        actionLabel="Refresh"
-                                        onActionPress={loadData}
-                                    />
-                                )}
-
-                                {!!status && (!status.available || !status.configured || !!status.reason) && (
-                                    <InlineBanner
-                                        tone={status.available ? 'info' : 'warning'}
-                                        message={formatProviderReason(status, false)}
-                                    />
-                                )}
-
-                                {!!status?.lastCheckedAt && (
-                                    <Text style={[styles.checkedText, { color: theme.colors.text.tertiary }]}>
-                                        Last checked {formatCheckTime(status.lastCheckedAt)}
-                                    </Text>
-                                )}
-
-                                {!isActive && (
-                                    <View style={styles.providerActions}>
-                                        <AppButton
-                                            label={switchState.label}
-                                            onPress={() => handleSwitchProvider(option.id)}
-                                            disabled={switchState.disabled}
-                                            loading={switchingProvider === option.id}
-                                        />
-                                    </View>
-                                )}
-                            </GroupedSection>
+                            <SettingsProviderCard
+                                key={option.id}
+                                provider={option.id}
+                                name={option.name}
+                                description={option.description}
+                                privacyHint={option.privacyHint}
+                                status={status}
+                                badgeLabel={getProviderBadgeLabel({ status, isActive })}
+                                badgeTone={getSettingsProviderTone(status, isActive)}
+                                statusMessage={showStatusMessage ? formatProviderReason(status, false) : null}
+                                statusMessageTone={status?.available ? 'info' : 'warning'}
+                                checkedAtLabel={status?.lastCheckedAt ? formatCheckTime(status.lastCheckedAt) : null}
+                                showSwitchAction={!isActive}
+                                switchLabel={switchState.label}
+                                switchDisabled={switchState.disabled}
+                                switchLoading={switchingProvider === option.id}
+                                onSwitch={() => handleSwitchProvider(option.id)}
+                                onRefresh={handleRefreshSettings}
+                            />
                         );
                     })}
                 </View>
@@ -563,6 +516,16 @@ export default function SettingsScreen() {
                                 Checked at {formatCheckTime(cloudProviderStatus.lastCheckedAt)}
                             </Text>
                         )}
+                        {!!cloudProviderStatus?.detailCode && (
+                            <Text style={[styles.infoMeta, { color: theme.colors.text.tertiary }]}>
+                                Status code: {cloudProviderStatus.detailCode}
+                            </Text>
+                        )}
+                        {!!cloudProviderStatus?.requestId && (
+                            <Text style={[styles.infoMeta, { color: theme.colors.text.tertiary }]}>
+                                Trace: {cloudProviderStatus.requestId}
+                            </Text>
+                        )}
                     </GroupedSection>
                 </View>
 
@@ -573,51 +536,16 @@ export default function SettingsScreen() {
                             ? 'Cloud is active. Keep one local model ready for offline fallback.'
                             : 'This model powers local on-device chat.'}
                     />
-                    <GroupedSection style={styles.infoCard}>
-                        {activeModel ? (
-                            <>
-                                <View style={styles.infoTopRow}>
-                                    <Text style={[styles.infoTitle, { color: theme.colors.text.primary }]}>
-                                        {getModelById(activeModel.model_id)?.name || activeModel.model_id}
-                                    </Text>
-                                    <StatusChip
-                                        label={activeModelMissing ? 'Missing File' : (activeProvider === 'cloud' ? 'Fallback Ready' : 'Active')}
-                                        tone={activeModelMissing ? 'warning' : 'success'}
-                                    />
-                                </View>
-                                <Text style={[styles.infoBody, { color: theme.colors.text.secondary }]}>
-                                    Size on disk: {formatBytes(activeModel.size_bytes)}
-                                </Text>
-                                {activeModelMissing && (
-                                    <InlineBanner
-                                        tone="warning"
-                                        message="Local model file is missing. Reinstall this model or pick another below."
-                                    />
-                                )}
-                            </>
-                        ) : (
-                            <>
-                                <Text style={[styles.infoTitle, { color: theme.colors.text.primary }]}>
-                                    {activeProvider === 'cloud'
-                                        ? 'No local fallback selected'
-                                        : 'No active local model selected'}
-                                </Text>
-                                <Text style={[styles.infoBody, { color: theme.colors.text.secondary }]}>
-                                    {usableInstalledModels.length > 0
-                                        ? (activeProvider === 'cloud'
-                                            ? 'Set one installed model as fallback for offline continuity.'
-                                            : 'Choose an installed model below to activate local chat.')
-                                        : 'Install a local model below to continue.'}
-                                </Text>
-                            </>
-                        )}
-                        {!!localFallbackWarning && (
-                            <InlineBanner
-                                tone="warning"
-                                message={localFallbackWarning}
-                            />
-                        )}
-                    </GroupedSection>
+                    <SettingsActiveModelCard
+                        title={localModelSummary.title}
+                        body={localModelSummary.body}
+                        statusLabel={localModelSummary.statusLabel}
+                        statusTone={localModelSummary.statusTone}
+                        warningMessage={activeModelMissing
+                            ? 'Local model file is missing. Reinstall this model or pick another below.'
+                            : null}
+                        fallbackWarningMessage={localFallbackWarning}
+                    />
                 </View>
 
                 <View style={styles.sectionBlock}>
@@ -653,86 +581,26 @@ export default function SettingsScreen() {
                             activeProvider
                         });
                         const isDownloading = status === 'downloading';
+                        const modelMeta = `${formatBytes(model.sizeBytes)} • Speed ${model.speedRating}/5 • Quality ${model.qualityRating}/5 • ${formatBatteryImpact(model.batteryImpact)}`;
 
                         return (
-                            <GroupedSection key={model.id} style={styles.modelCard}>
-                                <View style={styles.modelTopRow}>
-                                    <View style={styles.modelNameRow}>
-                                        <Text style={[styles.modelName, { color: theme.colors.text.primary }]}>
-                                            {model.name}
-                                        </Text>
-                                        <StatusChip
-                                            label={model.category === 'fast' ? 'Fast' : 'Smart'}
-                                            tone={model.category === 'fast' ? 'info' : 'warning'}
-                                        />
-                                    </View>
-                                    <StatusChip
-                                        label={getSettingsModelStatusLabel(status)}
-                                        tone={getModelStatusTone(status)}
-                                    />
-                                </View>
-
-                                <Text style={[styles.modelDescription, { color: theme.colors.text.secondary }]}>
-                                    {model.description}
-                                </Text>
-
-                                <Text style={[styles.modelMeta, { color: theme.colors.text.tertiary }]}>
-                                    {formatBytes(model.sizeBytes)} • Speed {model.speedRating}/5 • Quality {model.qualityRating}/5 • {formatBatteryImpact(model.batteryImpact)}
-                                </Text>
-
-                                {isDownloading && (
-                                    <View style={styles.progressBlock}>
-                                        <Text style={[styles.progressLabel, { color: theme.colors.text.secondary }]}>
-                                            Downloading {(downloadProgress * 100).toFixed(0)}%
-                                        </Text>
-                                        <View
-                                            style={[
-                                                styles.progressTrack,
-                                                { backgroundColor: theme.colors.background.grouped }
-                                            ]}
-                                        >
-                                            <View
-                                                style={[
-                                                    styles.progressFill,
-                                                    {
-                                                        width: `${Math.max(0, Math.min(100, downloadProgress * 100))}%`,
-                                                        backgroundColor: theme.colors.tint.primary
-                                                    }
-                                                ]}
-                                            />
-                                        </View>
-                                    </View>
-                                )}
-
-                                {!isDownloading && (
-                                    <View style={styles.modelActions}>
-                                        {actionState.showInstallAction && actionState.installActionLabel && (
-                                            <AppButton
-                                                size="sm"
-                                                variant="secondary"
-                                                label={actionState.installActionLabel}
-                                                onPress={() => handleDownloadModel(model.id)}
-                                                disabled={!!downloading}
-                                            />
-                                        )}
-                                        {actionState.showActivateAction && actionState.activateActionLabel && (
-                                            <AppButton
-                                                size="sm"
-                                                label={actionState.activateActionLabel}
-                                                onPress={() => handleSwitchModel(model.id)}
-                                            />
-                                        )}
-                                        {actionState.showDeleteAction && (
-                                            <AppButton
-                                                size="sm"
-                                                variant="destructive"
-                                                label="Delete"
-                                                onPress={() => handleDeleteModel(model.id)}
-                                            />
-                                        )}
-                                    </View>
-                                )}
-                            </GroupedSection>
+                            <SettingsModelCard
+                                key={model.id}
+                                model={model}
+                                status={status}
+                                statusLabel={getSettingsModelStatusLabel(status)}
+                                statusTone={getSettingsModelStatusTone(status)}
+                                categoryLabel={model.category === 'fast' ? 'Fast' : 'Smart'}
+                                categoryTone={model.category === 'fast' ? 'info' : 'warning'}
+                                meta={modelMeta}
+                                actionState={actionState}
+                                isDownloading={isDownloading}
+                                downloadProgress={downloadProgress}
+                                disableInstall={!!downloading}
+                                onInstall={() => handleDownloadModel(model.id)}
+                                onActivate={() => handleSwitchModel(model.id)}
+                                onDelete={() => handleDeleteModel(model.id)}
+                            />
                         );
                     })}
                 </View>
@@ -754,12 +622,12 @@ export default function SettingsScreen() {
                         </Text>
                         {!!selectedProviderStatus?.detailCode && (
                             <Text style={[styles.infoMeta, { color: theme.colors.text.tertiary }]}>
-                                Detail code: {selectedProviderStatus.detailCode}
+                                Selected provider code: {selectedProviderStatus.detailCode}
                             </Text>
                         )}
                         {!!selectedProviderStatus?.requestId && (
                             <Text style={[styles.infoMeta, { color: theme.colors.text.tertiary }]}>
-                                Trace: {selectedProviderStatus.requestId}
+                                Selected trace: {selectedProviderStatus.requestId}
                             </Text>
                         )}
                     </GroupedSection>
@@ -773,7 +641,7 @@ export default function SettingsScreen() {
                     <GroupedSection style={styles.troubleshootingCard}>
                         <AppButton
                             label="Refresh All Status"
-                            onPress={loadData}
+                            onPress={handleRefreshSettings}
                             variant="secondary"
                         />
                         {activeProvider === 'cloud' && localProviderStatus?.available && (
@@ -800,7 +668,11 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
     refreshButton: {
-        marginRight: 12
+        marginRight: 12,
+        minWidth: 40,
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     content: {
         paddingHorizontal: 14,
@@ -811,52 +683,10 @@ const styles = StyleSheet.create({
     sectionBlock: {
         marginTop: 8
     },
-    providerCard: {
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        marginBottom: 10
-    },
-    providerTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10
-    },
-    providerTitleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        flex: 1
-    },
-    providerName: {
-        fontSize: 16,
-        fontWeight: '700'
-    },
-    providerDescription: {
-        marginTop: 6,
-        fontSize: 13
-    },
-    providerHint: {
-        marginTop: 4,
-        fontSize: 12
-    },
-    checkedText: {
-        marginTop: 8,
-        fontSize: 11
-    },
-    providerActions: {
-        marginTop: 10
-    },
     infoCard: {
         paddingHorizontal: 12,
         paddingVertical: 12,
         gap: 8
-    },
-    infoTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10
     },
     infoTitle: {
         fontSize: 15,
@@ -878,57 +708,6 @@ const styles = StyleSheet.create({
     storageText: {
         fontSize: 13,
         fontWeight: '600'
-    },
-    modelCard: {
-        marginBottom: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 12
-    },
-    modelTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10
-    },
-    modelNameRow: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8
-    },
-    modelName: {
-        fontSize: 15,
-        fontWeight: '700'
-    },
-    modelDescription: {
-        marginTop: 6,
-        fontSize: 13
-    },
-    modelMeta: {
-        marginTop: 5,
-        fontSize: 12
-    },
-    modelActions: {
-        marginTop: 10,
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8
-    },
-    progressBlock: {
-        marginTop: 10,
-        gap: 6
-    },
-    progressLabel: {
-        fontSize: 12
-    },
-    progressTrack: {
-        height: 8,
-        borderRadius: 999,
-        overflow: 'hidden'
-    },
-    progressFill: {
-        height: '100%',
-        borderRadius: 999
     },
     troubleshootingCard: {
         paddingHorizontal: 12,

@@ -13,6 +13,7 @@ test('resolveMotionDurationMs returns zero when reduced motion is enabled', () =
 
 test('resolveMotionDurationMs clamps invalid and oversized durations', () => {
   assert.equal(resolveMotionDurationMs(Number.NaN, false), 0);
+  assert.equal(resolveMotionDurationMs(-25, false), 0);
   assert.equal(resolveMotionDurationMs(999, false), 600);
 });
 
@@ -37,5 +38,6 @@ test('resolveHapticPattern returns deterministic patterns by feedback kind', () 
   assert.deepEqual(resolveHapticPattern('success', false), [0, 10]);
   assert.deepEqual(resolveHapticPattern('warning', false), [0, 8, 28, 8]);
   assert.deepEqual(resolveHapticPattern('error', false), [0, 14, 24, 10]);
+  assert.equal(resolveHapticPattern('warning', true), null);
   assert.equal(resolveHapticPattern('success', true), null);
 });
