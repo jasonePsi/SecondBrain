@@ -46,10 +46,13 @@ Open **Settings -> AI Provider** and select:
 - `Local (On-device)` for offline mode
 - `OpenAI (Cloud via Proxy)` when backend is available
 
+Settings now separates provider lifecycle into dedicated sections (`Active Provider`, `Cloud Status`, `Local Models`, `Fallback`, `Privacy & Diagnostics`, `Troubleshooting`) so availability and next-step actions remain explicit.
+
 If the backend is unavailable or not configured, cloud selection is disabled with a reason.
 Cloud switch attempts re-check live health and show actionable detail codes/traces when unavailable.
 If a provider switch happens while a turn is still in flight, the current reply finishes first and the switch applies to the next turn.
-If local provider status is unavailable (for example no active local model or missing file), switching to local is blocked until local setup is fixed in Settings.
+If local provider status is unavailable because no local model is selected or the active local file is missing, and another usable local model exists, Settings offers **Fix and Switch to Local** (auto-selects a deterministic fallback and retries local availability).
+If local is unavailable for other reasons, switching to local remains blocked until setup is fixed in Settings.
 
 If cloud is selected but unavailable during startup, the app routes to Settings and surfaces the provider reason there.
 If local provider is selected and local status is unavailable because the active file is missing or no active local model is selected, startup attempts to activate a usable local fallback model before routing.

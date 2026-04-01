@@ -52,9 +52,13 @@ export const formatProviderStatusReason = (
     let base = mappedReason || explicitReason;
     if (!base) {
         if (!status.configured) {
-            base = 'Provider setup is required.';
+            base = status.provider === 'cloud'
+                ? 'Cloud provider setup is required.'
+                : 'Local provider setup is required.';
         } else if (!status.available) {
-            base = 'Provider is currently unavailable.';
+            base = status.provider === 'cloud'
+                ? 'Cloud provider is currently unavailable. Verify proxy setup and retry.'
+                : 'Local provider is currently unavailable. Check active model setup and retry.';
         } else {
             return '';
         }

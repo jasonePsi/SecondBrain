@@ -1,19 +1,28 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    SectionList,
+    ScrollView,
     StyleSheet,
     Text,
-    TextInput,
-    TouchableOpacity,
     View
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '../../src/constants/Colors';
 import { MessageRepo, MessageSearchHit } from '../../src/repositories/message_repo';
 import { Space, SpaceRepo } from '../../src/repositories/space_repo';
 import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
+import { useAppTheme } from '../../src/theme/theme';
+import { runLayoutFeedback, triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
+import {
+    AppButton,
+    EmptyStateView,
+    GroupedSection,
+    InlineBanner,
+    ListRow,
+    ScreenScaffold,
+    SearchField,
+    SectionHeader,
+    StatusChip
+} from '../../src/components/ui';
 
 type SearchType = 'space' | 'thread' | 'message';
 
@@ -22,8 +31,15 @@ type SearchResult = {
     id: string;
     title: string;
     subtitle: string;
-    snippet?: string;
+    meta?: string;
     navigateTo: string;
+};
+
+type SearchSection = {
+    type: SearchType;
+    title: string;
+    subtitle: string;
+    data: SearchResult[];
 };
 
 const DEBOUNCE_MS = 300;
@@ -57,8 +73,21 @@ const formatResultTimestamp = (value: number): string => {
     return new Date(value).toLocaleString();
 };
 
+const toRoleLabel = (role: MessageSearchHit['role']): string => {
+    if (role === 'assistant') return 'Assistant';
+    if (role === 'system') return 'System';
+    return 'You';
+};
+
+const cleanSnippet = (value: string | null | undefined): string => {
+    if (!value) return '';
+    return value.replace(/\s+/g, ' ').trim();
+};
+
 export default function SearchScreen() {
     const router = useRouter();
+    const theme = useAppTheme();
+    const reducedMotion = useReducedMotion();
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
     const [spaces, setSpaces] = useState<Space[]>([]);
@@ -74,6 +103,8 @@ export default function SearchScreen() {
     const normalizedQuery = query.trim();
     const isQuerySettled = normalizedQuery === debouncedQuery;
     const hasStableResults = isQuerySettled && resultsQuery === normalizedQuery;
+    const showError = !!error && normalizedQuery.length > 0 && hasStableResults;
+
     const cancelInFlightSearch = () => {
         searchTokenRef.current += 1;
     };
@@ -90,6 +121,13 @@ export default function SearchScreen() {
         }, DEBOUNCE_MS);
 
         return () => clearTimeout(timeout);
+    }, [query]);
+
+    useEffect(() => {
+        const nextQuery = query.trim();
+        if (nextQuery !== resultsQueryRef.current) {
+            setError(null);
+        }
     }, [query]);
 
     useEffect(() => {
@@ -131,6 +169,7 @@ export default function SearchScreen() {
                 }, {});
 
                 if (searchToken !== searchTokenRef.current) return;
+                runLayoutFeedback(reducedMotion);
                 setSpaces(rankByStartsWith(spaceRows, debouncedQuery, (item) => item.name));
                 setThreads(rankByStartsWith(threadRows, debouncedQuery, (item) => item.title));
                 setMessages(messageRows);
@@ -141,6 +180,8 @@ export default function SearchScreen() {
                 if (searchToken !== searchTokenRef.current) return;
                 console.error('Search failed:', err);
                 setError('Search is temporarily unavailable. Please try again.');
+                setResultsQuery(debouncedQuery);
+                resultsQueryRef.current = debouncedQuery;
             } finally {
                 if (searchToken !== searchTokenRef.current) return;
                 setIsSearching(false);
@@ -148,19 +189,22 @@ export default function SearchScreen() {
         };
 
         runSearch();
-    }, [debouncedQuery, searchNonce]);
+    }, [debouncedQuery, searchNonce, reducedMotion]);
 
     const sections = useMemo(() => {
-        const nextSections: Array<{ title: string; data: SearchResult[] }> = [];
+        const nextSections: SearchSection[] = [];
 
         if (spaces.length > 0) {
             nextSections.push({
-                title: `Spaces (${spaces.length})`,
+                type: 'space',
+                title: 'Spaces',
+                subtitle: 'Collections of related threads.',
                 data: spaces.map((space) => ({
                     type: 'space',
                     id: space.id,
                     title: space.name,
                     subtitle: 'Space',
+                    meta: 'Open space',
                     navigateTo: `/space/${space.id}`
                 }))
             });
@@ -168,12 +212,15 @@ export default function SearchScreen() {
 
         if (threads.length > 0) {
             nextSections.push({
-                title: `Threads (${threads.length})`,
+                type: 'thread',
+                title: 'Threads',
+                subtitle: 'Conversations where the match appears.',
                 data: threads.map((thread) => ({
                     type: 'thread',
                     id: thread.id,
                     title: thread.title,
                     subtitle: 'Thread',
+                    meta: 'Open thread',
                     navigateTo: `/thread/${thread.id}`
                 }))
             });
@@ -181,13 +228,15 @@ export default function SearchScreen() {
 
         if (messages.length > 0) {
             nextSections.push({
-                title: `Messages (${messages.length})`,
+                type: 'message',
+                title: 'Messages',
+                subtitle: 'Jump directly into the matched message context.',
                 data: messages.map((message) => ({
                     type: 'message',
                     id: message.id,
-                    title: toMessageTitle(message),
-                    subtitle: `${message.role === 'assistant' ? 'Assistant' : 'You'} in ${messageThreadTitles[message.thread_id] || 'Thread'} • ${formatResultTimestamp(message.created_at)}`,
-                    snippet: message.snippet,
+                    title: messageThreadTitles[message.thread_id] || 'Thread',
+                    subtitle: cleanSnippet(message.snippet) || toMessageTitle(message),
+                    meta: `${toRoleLabel(message.role)} • ${formatResultTimestamp(message.created_at)} • Opens at this match`,
                     navigateTo: `/thread/${message.thread_id}?messageId=${encodeURIComponent(message.id)}`
                 }))
             });
@@ -199,9 +248,15 @@ export default function SearchScreen() {
     const getIconForType = (
         type: SearchType
     ): React.ComponentProps<typeof Ionicons>['name'] => {
-        if (type === 'space') return 'grid-outline';
+        if (type === 'space') return 'albums-outline';
         if (type === 'thread') return 'chatbubble-outline';
         return 'document-text-outline';
+    };
+
+    const getSectionTone = (type: SearchType): 'info' | 'warning' | 'success' | 'neutral' => {
+        if (type === 'message') return 'warning';
+        if (type === 'space') return 'success';
+        return 'info';
     };
 
     const clearQuery = () => {
@@ -216,6 +271,7 @@ export default function SearchScreen() {
         setMessageThreadTitles({});
         setError(null);
         setIsSearching(false);
+        runLayoutFeedback(reducedMotion);
     };
 
     const retrySearch = () => {
@@ -224,246 +280,202 @@ export default function SearchScreen() {
         setSearchNonce((prev) => prev + 1);
     };
 
-    const renderItem = ({ item }: { item: SearchResult }) => (
-        <TouchableOpacity
-            style={styles.resultItem}
-            onPress={() => router.push(item.navigateTo as any)}
-        >
-            <Ionicons
-                name={getIconForType(item.type)}
-                size={22}
-                color={Colors.primary}
-                style={styles.resultIcon}
-            />
-            <View style={styles.resultText}>
-                <Text style={styles.resultTitle} numberOfLines={1}>{item.title}</Text>
-                <Text style={styles.resultSubtitle}>{item.subtitle}</Text>
-                {!!item.snippet && (
-                    <Text style={styles.resultSnippet} numberOfLines={2}>
-                        {item.snippet}
-                    </Text>
-                )}
-                {item.type === 'message' && (
-                    <Text style={styles.resultRouteHint}>Opens directly at this message</Text>
-                )}
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={Colors.secondaryText} />
-        </TouchableOpacity>
+    const totalResults = sections.reduce((sum, section) => sum + section.data.length, 0);
+    const showResultList = normalizedQuery.length > 0
+        && !showError
+        && hasStableResults
+        && sections.length > 0;
+
+    const openResult = (item: SearchResult) => {
+        triggerHaptic('selection', reducedMotion);
+        router.push(item.navigateTo as any);
+    };
+
+    const renderItem = (item: SearchResult) => (
+        <ListRow
+            title={item.title}
+            subtitle={item.subtitle}
+            meta={item.meta}
+            onPress={() => openResult(item)}
+            leading={
+                <View style={[styles.iconWrap, { backgroundColor: theme.colors.background.grouped }]}>
+                    <Ionicons
+                        name={getIconForType(item.type)}
+                        size={16}
+                        color={theme.colors.tint.primary}
+                    />
+                </View>
+            }
+            trailing={
+                <Ionicons name="chevron-forward" size={16} color={theme.colors.text.tertiary} />
+            }
+        />
     );
 
     return (
-        <View style={styles.container}>
-            <View style={styles.searchContainer}>
-                <Ionicons name="search" size={20} color={Colors.secondaryText} style={styles.searchIcon} />
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search spaces, threads, and messages"
-                    placeholderTextColor={Colors.secondaryText}
+        <ScreenScaffold>
+            <Stack.Screen options={{ title: 'Search' }} />
+            <View style={styles.content}>
+                <SectionHeader
+                    title="Search"
+                    subtitle="Find spaces, threads, and message context fast."
+                />
+                <SearchField
                     value={query}
                     onChangeText={setQuery}
-                    autoCapitalize="none"
-                    autoCorrect={false}
+                    placeholder="Search spaces, threads, and messages"
+                    searching={isSearching}
+                    onClear={clearQuery}
+                    accessibilityLabel="Search across spaces, threads, and messages"
                 />
-                {isSearching && <ActivityIndicator size="small" color={Colors.primary} style={styles.spinner} />}
-                {query.length > 0 && (
-                    <TouchableOpacity onPress={clearQuery}>
-                        <Ionicons name="close-circle" size={20} color={Colors.secondaryText} />
-                    </TouchableOpacity>
+
+                {showError && (
+                    <>
+                        <InlineBanner
+                            tone="error"
+                            message={error || 'Search failed.'}
+                            actionLabel="Retry"
+                            onActionPress={retrySearch}
+                        />
+                        <View style={styles.errorActions}>
+                            <AppButton label="Retry" onPress={retrySearch} />
+                            <AppButton label="Clear" variant="secondary" onPress={clearQuery} />
+                        </View>
+                    </>
+                )}
+
+                {normalizedQuery.length > 0 && !isQuerySettled && (
+                    <Text style={[styles.helperText, { color: theme.colors.text.tertiary }]}>
+                        Keep typing to refine results…
+                    </Text>
+                )}
+                {isSearching && debouncedQuery.length > 0 && isQuerySettled && (
+                    <Text style={[styles.helperText, { color: theme.colors.text.tertiary }]}>
+                        Searching for "{normalizedQuery}"…
+                    </Text>
+                )}
+                {!!normalizedQuery && !isSearching && !showError && hasStableResults && (
+                    <GroupedSection style={styles.querySummaryCard}>
+                        <View style={styles.querySummaryRow}>
+                            <Text
+                                numberOfLines={1}
+                                style={[styles.querySummaryText, { color: theme.colors.text.secondary }]}
+                            >
+                                Results for "{normalizedQuery}"
+                            </Text>
+                            <StatusChip label={`${totalResults}`} tone="info" />
+                        </View>
+                    </GroupedSection>
+                )}
+
+                {!normalizedQuery && (
+                    <EmptyStateView
+                        title="Search your second brain"
+                        message="Try names, topics, reminders, or phrases from messages."
+                    />
+                )}
+
+                {!!normalizedQuery && !isSearching && sections.length === 0 && hasStableResults && !error && (
+                    <EmptyStateView
+                        title="No results"
+                        message={`No matches for "${normalizedQuery}". Try a broader phrase.`}
+                        primaryActionLabel="Clear search"
+                        onPrimaryAction={clearQuery}
+                    />
+                )}
+
+                {showResultList && (
+                    <ScrollView
+                        style={styles.resultsScroll}
+                        contentContainerStyle={styles.listContent}
+                        keyboardShouldPersistTaps="handled"
+                    >
+                        {sections.map((section) => (
+                            <View key={section.title} style={styles.sectionBlock}>
+                                <SectionHeader
+                                    title={section.title}
+                                    subtitle={section.subtitle}
+                                    trailing={(
+                                        <StatusChip
+                                            label={String(section.data.length)}
+                                            tone={getSectionTone(section.type)}
+                                        />
+                                    )}
+                                />
+                                <GroupedSection>
+                                    {section.data.map((item, index) => (
+                                        <View key={`${item.type}-${item.id}`}>
+                                            {renderItem(item)}
+                                            {index < section.data.length - 1 && (
+                                                <View
+                                                    style={[
+                                                        styles.separator,
+                                                        { backgroundColor: theme.colors.separator.subtle }
+                                                    ]}
+                                                />
+                                            )}
+                                        </View>
+                                    ))}
+                                </GroupedSection>
+                            </View>
+                        ))}
+                    </ScrollView>
                 )}
             </View>
-
-            {!!error && (
-                <View style={styles.errorRow}>
-                    <Text style={styles.errorText}>{error}</Text>
-                    <View style={styles.errorActionsRow}>
-                        <TouchableOpacity onPress={retrySearch}>
-                            <Text style={styles.errorAction}>Retry</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={clearQuery}>
-                            <Text style={styles.errorAction}>Clear</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            )}
-
-            {normalizedQuery.length > 0 && !isQuerySettled && (
-                <Text style={styles.searchingText}>Keep typing to search…</Text>
-            )}
-            {isSearching && debouncedQuery.length > 0 && isQuerySettled && (
-                <Text style={styles.searchingText}>Searching for "{normalizedQuery}"…</Text>
-            )}
-            {!!normalizedQuery && !isSearching && sections.length > 0 && hasStableResults && (
-                <Text style={styles.searchingText}>
-                    {sections.reduce((sum, section) => sum + section.data.length, 0)} result(s) for "{normalizedQuery}"
-                </Text>
-            )}
-
-            {!normalizedQuery && (
-                <View style={styles.emptyState}>
-                    <Ionicons name="search" size={46} color={Colors.border} />
-                    <Text style={styles.emptyTitle}>Search your second brain</Text>
-                    <Text style={styles.emptyText}>Try names, topics, reminders, or phrases from messages.</Text>
-                </View>
-            )}
-
-            {!!normalizedQuery && !isSearching && sections.length === 0 && hasStableResults && !error && (
-                <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No results</Text>
-                    <Text style={styles.emptyText}>No matches for "{normalizedQuery}". Try a broader phrase.</Text>
-                    <TouchableOpacity onPress={clearQuery} style={styles.emptyActionButton}>
-                        <Text style={styles.emptyActionText}>Clear search</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
-
-            {sections.length > 0 && hasStableResults && (
-                <SectionList
-                    sections={sections}
-                    keyExtractor={(item) => `${item.type}-${item.id}`}
-                    renderItem={renderItem}
-                    renderSectionHeader={({ section }) => (
-                        <Text style={styles.sectionHeader}>{section.title}</Text>
-                    )}
-                    contentContainerStyle={styles.listContent}
-                    keyboardShouldPersistTaps="handled"
-                />
-            )}
-        </View>
+        </ScreenScaffold>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    content: {
         flex: 1,
-        backgroundColor: Colors.background
+        paddingHorizontal: 14,
+        paddingTop: 10
     },
-    searchContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: Colors.card,
-        margin: 16,
-        paddingHorizontal: 12,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: Colors.border
-    },
-    searchIcon: {
-        marginRight: 8
-    },
-    spinner: {
-        marginRight: 8
-    },
-    searchInput: {
-        flex: 1,
-        paddingVertical: 14,
-        fontSize: 16,
-        color: Colors.text
-    },
-    errorText: {
-        flex: 1,
-        color: Colors.notification,
+    helperText: {
+        marginTop: 8,
+        marginBottom: 2,
         fontSize: 12
     },
-    errorAction: {
-        color: Colors.primary,
-        fontSize: 12,
+    errorActions: {
+        marginTop: 8,
+        flexDirection: 'row',
+        gap: 8
+    },
+    querySummaryCard: {
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10
+    },
+    querySummaryRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8
+    },
+    querySummaryText: {
+        flex: 1,
+        fontSize: 13,
         fontWeight: '600'
     },
-    errorActionsRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10
-    },
-    errorRow: {
-        marginHorizontal: 16,
-        marginBottom: 6,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10
-    },
-    searchingText: {
-        marginHorizontal: 16,
-        marginBottom: 4,
-        color: Colors.secondaryText,
-        fontSize: 12
-    },
-    listContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 20
-    },
-    sectionHeader: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: Colors.secondaryText,
-        marginTop: 12,
-        marginBottom: 8
-    },
-    resultItem: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        backgroundColor: Colors.card,
-        padding: 12,
-        borderRadius: 10,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: Colors.border
-    },
-    resultIcon: {
-        marginTop: 2,
-        marginRight: 10
-    },
-    resultText: {
+    resultsScroll: {
         flex: 1
     },
-    resultTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: Colors.text
+    sectionBlock: {
+        marginTop: 14
     },
-    resultSubtitle: {
-        marginTop: 2,
-        fontSize: 12,
-        color: Colors.secondaryText
+    listContent: {
+        paddingTop: 4,
+        paddingBottom: 24
     },
-    resultSnippet: {
-        marginTop: 4,
-        fontSize: 12,
-        color: Colors.secondaryText
-    },
-    resultRouteHint: {
-        marginTop: 4,
-        fontSize: 11,
-        color: Colors.primary
-    },
-    emptyState: {
-        flex: 1,
+    iconWrap: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
         alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 30
+        justifyContent: 'center'
     },
-    emptyTitle: {
-        marginTop: 14,
-        fontSize: 18,
-        fontWeight: '700',
-        color: Colors.text
-    },
-    emptyText: {
-        marginTop: 6,
-        fontSize: 14,
-        color: Colors.secondaryText,
-        textAlign: 'center'
-    },
-    emptyActionButton: {
-        marginTop: 12,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: Colors.primary,
-        paddingHorizontal: 12,
-        paddingVertical: 7
-    },
-    emptyActionText: {
-        color: Colors.primary,
-        fontSize: 12,
-        fontWeight: '600'
+    separator: {
+        height: StyleSheet.hairlineWidth,
+        marginLeft: 44
     }
 });

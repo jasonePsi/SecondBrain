@@ -1,4 +1,3 @@
-import { View, Text } from "react-native";
 import { useEffect } from "react";
 import { useRouter } from "expo-router";
 import { runMigrations } from "../src/db/migrations";
@@ -15,6 +14,7 @@ import {
 } from "../src/services/model_manager_utils";
 import { formatProviderStatusReason } from "../src/services/provider_status_copy_utils";
 import { debugLog } from "../src/services/runtime_log";
+import { ScreenScaffold, LoadingStateView } from "../src/components/ui";
 
 const resolveInitialRoute = async (): Promise<InitialRoute> => {
     const activeProvider = await LLMService.getActiveProvider();
@@ -107,8 +107,11 @@ export default function Index() {
     }, []);
 
     return (
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-            <Text>Second Brain Mobile (Initializing...)</Text>
-        </View>
+        <ScreenScaffold edges={['left', 'right', 'top', 'bottom']}>
+            <LoadingStateView
+                title="Preparing SecondBrain"
+                message="Checking migrations, provider status, and startup route."
+            />
+        </ScreenScaffold>
     );
 }

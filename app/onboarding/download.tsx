@@ -1,9 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Colors } from '../../src/constants/Colors';
-import { ModelManager } from '../../src/services/ModelManager';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { getModelById } from '../../src/constants/ModelRegistry';
+import { ModelManager } from '../../src/services/ModelManager';
+import { useAppTheme } from '../../src/theme/theme';
+import { triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
+import {
+    AppButton,
+    GroupedSection,
+    InlineBanner,
+    ScreenScaffold,
+    SectionHeader,
+    StatusChip
+} from '../../src/components/ui';
 
 const toUserFacingDownloadError = (error: unknown): string => {
     if (error instanceof Error && error.message.trim().length > 0) {
@@ -15,7 +24,14 @@ const toUserFacingDownloadError = (error: unknown): string => {
     return 'Installation failed';
 };
 
+const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0.0 GB';
+    return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+};
+
 export default function DownloadScreen() {
+    const theme = useAppTheme();
+    const reducedMotion = useReducedMotion();
     const router = useRouter();
     const params = useLocalSearchParams();
     const modelId = params.modelId as string;
@@ -37,23 +53,20 @@ export default function DownloadScreen() {
         try {
             setDownloading(true);
             setError(null);
+            setComplete(false);
 
             const modelConfig = getModelById(modelId);
             if (!modelConfig) {
                 throw new Error('Selected model could not be found. Return to model selection and choose again.');
             }
 
-            console.log(`Starting download for ${modelConfig.name}...`);
-
             await ModelManager.downloadModel(modelId, (p) => {
                 setProgress(p);
             }, { activate: true });
-
-            console.log('Download complete!');
             setComplete(true);
             setDownloading(false);
+            triggerHaptic('success', reducedMotion);
 
-            // Navigate to app after short delay
             setTimeout(() => {
                 router.replace('/');
             }, 1500);
@@ -61,6 +74,8 @@ export default function DownloadScreen() {
             console.error('Download failed:', err);
             setError(toUserFacingDownloadError(err));
             setDownloading(false);
+            setComplete(false);
+            triggerHaptic('error', reducedMotion);
         }
     };
 
@@ -71,184 +86,172 @@ export default function DownloadScreen() {
         startDownload();
     };
 
-    const handleSkip = () => {
+    const handleBack = () => {
+        triggerHaptic('selection', reducedMotion);
         router.replace('/onboarding/model-selection');
     };
 
     const modelConfig = getModelById(modelId);
-    const formatBytes = (bytes: number) => (bytes / 1_000_000_000).toFixed(1) + ' GB';
+    const downloadedBytes = modelConfig ? modelConfig.sizeBytes * progress : 0;
+
+    const stageLabel = complete
+        ? 'Ready'
+        : error
+            ? 'Needs Attention'
+            : downloading
+                ? 'Installing'
+                : 'Preparing';
 
     return (
-        <View style={styles.container}>
+        <ScreenScaffold>
+            <Stack.Screen options={{ title: 'Model Install' }} />
             <View style={styles.content}>
-                <Text style={styles.title}>
-                    {complete ? 'Model Ready' : downloading ? 'Installing Local Model' : 'Installation Failed'}
-                </Text>
+                <SectionHeader
+                    title={complete ? 'Model Ready' : (error ? 'Install Interrupted' : 'Installing Local Model')}
+                    subtitle="SecondBrain is preparing your on-device model."
+                    trailing={<StatusChip label={stageLabel} tone={complete ? 'success' : error ? 'warning' : 'info'} />}
+                />
 
-                {modelConfig && (
-                    <Text style={styles.modelName}>{modelConfig.name}</Text>
+                {!!modelConfig && (
+                    <GroupedSection style={styles.modelCard}>
+                        <Text style={[styles.modelName, { color: theme.colors.text.primary }]}>
+                            {modelConfig.name}
+                        </Text>
+                        <Text style={[styles.modelMeta, { color: theme.colors.text.secondary }]}>
+                            {formatBytes(modelConfig.sizeBytes)} • {modelConfig.category === 'fast' ? 'Fast profile' : 'Smart profile'}
+                        </Text>
+                    </GroupedSection>
                 )}
 
-                {downloading && (
-                    <>
-                        <View style={styles.progressContainer}>
-                            <View style={styles.progressBarBg}>
-                                <View
-                                    style={[
-                                        styles.progressBarFill,
-                                        { width: `${progress * 100}%` }
-                                    ]}
-                                />
-                            </View>
-                            <Text style={styles.progressText}>
-                                {(progress * 100).toFixed(1)}%
+                <GroupedSection style={styles.progressCard}>
+                    <Text style={[styles.progressTitle, { color: theme.colors.text.primary }]}>
+                        {complete ? 'Installation complete' : 'Download progress'}
+                    </Text>
+                    <View
+                        style={[
+                            styles.progressTrack,
+                            { backgroundColor: theme.colors.background.grouped }
+                        ]}
+                    >
+                        <View
+                            style={[
+                                styles.progressFill,
+                                {
+                                    width: `${Math.max(0, Math.min(100, progress * 100))}%`,
+                                    backgroundColor: theme.colors.tint.primary
+                                }
+                            ]}
+                        />
+                    </View>
+                    <Text style={[styles.progressMeta, { color: theme.colors.text.secondary }]}>
+                        {(progress * 100).toFixed(1)}% • {formatBytes(downloadedBytes)} / {formatBytes(modelConfig?.sizeBytes || 0)}
+                    </Text>
+                    {downloading && (
+                        <View style={styles.spinnerRow}>
+                            <ActivityIndicator size="small" color={theme.colors.tint.primary} />
+                            <Text style={[styles.spinnerText, { color: theme.colors.text.tertiary }]}>
+                                Keep this screen open. Setup will continue automatically.
                             </Text>
                         </View>
-
-                        {modelConfig && (
-                            <Text style={styles.sizeText}>
-                                {formatBytes(modelConfig.sizeBytes * progress)} / {formatBytes(modelConfig.sizeBytes)}
-                            </Text>
-                        )}
-
-                        <ActivityIndicator
-                            size="large"
-                            color={Colors.primary}
-                            style={styles.spinner}
-                        />
-
-                        <Text style={styles.infoText}>
-                            This may take a few minutes depending on your connection.
-                            {'\n'}Keep this screen open. Setup continues automatically when complete.
-                        </Text>
-                    </>
-                )}
+                    )}
+                </GroupedSection>
 
                 {complete && (
-                    <>
-                        <Text style={styles.successText}>
-                            Model installed and activated. Opening Spaces...
-                        </Text>
-                    </>
+                    <InlineBanner
+                        tone="info"
+                        message="Model installed and activated. Opening Spaces…"
+                    />
                 )}
 
-                {error && (
-                    <>
-                        <View style={styles.errorBox}>
-                            <Text style={styles.errorText}>{error}</Text>
-                        </View>
-
-                        <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-                            <Text style={styles.retryButtonText}>Try Download Again</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.skipButton} onPress={handleSkip}>
-                            <Text style={styles.skipButtonText}>Back to Model Selection</Text>
-                        </TouchableOpacity>
-                    </>
+                {!!error && (
+                    <InlineBanner
+                        tone="error"
+                        message={error}
+                    />
                 )}
+
+                <GroupedSection style={styles.actionCard}>
+                    {!!error && (
+                        <AppButton
+                            label="Try Download Again"
+                            onPress={handleRetry}
+                        />
+                    )}
+                    <AppButton
+                        label="Back to Model Selection"
+                        variant="secondary"
+                        onPress={handleBack}
+                        disabled={downloading && !error && !complete}
+                    />
+                    <Text style={[styles.actionHint, { color: theme.colors.text.tertiary }]}>
+                        {downloading && !error && !complete
+                            ? 'Back becomes available if installation fails or completes.'
+                            : 'You can return to adjust your model choice at any time.'}
+                    </Text>
+                </GroupedSection>
             </View>
-        </View>
+        </ScreenScaffold>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: Colors.background,
-        justifyContent: 'center',
-        padding: 20
-    },
     content: {
-        alignItems: 'center'
+        flex: 1,
+        paddingHorizontal: 14,
+        paddingTop: 10,
+        paddingBottom: 26,
+        gap: 10
     },
-    title: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        marginBottom: 12,
-        textAlign: 'center'
+    modelCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 12
     },
     modelName: {
-        fontSize: 18,
-        color: Colors.textSecondary,
-        marginBottom: 32
+        fontSize: 16,
+        fontWeight: '700'
     },
-    progressContainer: {
-        width: '100%',
-        alignItems: 'center',
-        marginBottom: 16
+    modelMeta: {
+        marginTop: 4,
+        fontSize: 13
     },
-    progressBarBg: {
-        width: '100%',
-        height: 12,
-        backgroundColor: Colors.border,
-        borderRadius: 6,
-        overflow: 'hidden',
-        marginBottom: 8
+    progressCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 12
     },
-    progressBarFill: {
+    progressTitle: {
+        fontSize: 15,
+        fontWeight: '700'
+    },
+    progressTrack: {
+        marginTop: 10,
+        height: 10,
+        borderRadius: 999,
+        overflow: 'hidden'
+    },
+    progressFill: {
         height: '100%',
-        backgroundColor: Colors.primary,
-        borderRadius: 6
+        borderRadius: 999
     },
-    progressText: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: Colors.primary
+    progressMeta: {
+        marginTop: 8,
+        fontSize: 13
     },
-    sizeText: {
-        fontSize: 14,
-        color: Colors.textSecondary,
-        marginBottom: 24
+    spinnerRow: {
+        marginTop: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8
     },
-    spinner: {
-        marginVertical: 24
+    spinnerText: {
+        flex: 1,
+        fontSize: 12
     },
-    infoText: {
-        fontSize: 14,
-        color: Colors.textSecondary,
-        textAlign: 'center',
-        lineHeight: 20
-    },
-    successText: {
-        fontSize: 16,
-        color: Colors.textSecondary,
-        textAlign: 'center',
-        marginTop: 24
-    },
-    errorBox: {
-        backgroundColor: '#FFEBEE',
-        padding: 16,
-        borderRadius: 8,
-        marginBottom: 24,
-        width: '100%'
-    },
-    errorText: {
-        color: '#C62828',
-        textAlign: 'center',
-        fontSize: 14
-    },
-    retryButton: {
-        backgroundColor: Colors.primary,
-        paddingHorizontal: 32,
-        paddingVertical: 14,
-        borderRadius: 8,
-        marginBottom: 12,
-        width: '100%',
-        alignItems: 'center'
-    },
-    retryButtonText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '600'
-    },
-    skipButton: {
+    actionCard: {
+        paddingHorizontal: 12,
         paddingVertical: 12,
-        width: '100%',
-        alignItems: 'center'
+        gap: 8
     },
-    skipButtonText: {
-        color: Colors.textSecondary,
-        fontSize: 14
+    actionHint: {
+        fontSize: 12
     }
 });

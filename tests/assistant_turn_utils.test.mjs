@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createInFlightTurnController,
   createTurnStageTracker,
+  executeAssistantTurn,
   getAssistantFallbackReplyForStage,
   getUserFacingTurnErrorForStage,
   isCloudAssistantReplyFailureStage,
@@ -337,5 +338,186 @@ test('createInFlightTurnController clearIfCurrent is a safe no-op when ref is al
 
   inFlightTurnRef.current = null;
   assert.doesNotThrow(() => controller.clearIfCurrent());
+  assert.equal(inFlightTurnRef.current, null);
+});
+
+test('executeAssistantTurn runs deterministic lifecycle and clears in-flight turn state', async () => {
+  const inFlightTurnRef = { current: null };
+  const stageTransitions = [];
+  const callOrder = [];
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-success',
+    threadId: 'thread-exec-success',
+    startedAt: 1234,
+    inFlightTurnRef,
+    persistUserMessage: async () => {
+      callOrder.push('persist_user');
+    },
+    resolveProvider: async () => {
+      callOrder.push('resolve_provider');
+      return 'cloud';
+    },
+    initProvider: async (provider) => {
+      callOrder.push(`init:${provider}`);
+    },
+    buildMemoryContext: async (provider) => {
+      callOrder.push(`build_context:${provider}`);
+      return { chatMessages: [{ role: 'user', content: 'hello' }] };
+    },
+    generateAssistantReply: async (provider, context) => {
+      callOrder.push(`generate:${provider}:${context.chatMessages.length}`);
+      return 'assistant reply';
+    },
+    persistAssistantReply: async (assistantReply, provider) => {
+      callOrder.push(`persist_assistant:${provider}:${assistantReply}`);
+    },
+    queuePostProcessing: async ({ provider, assistantReply }) => {
+      callOrder.push(`queue:${provider}:${assistantReply}`);
+    },
+    onStateChange: (snapshot) => {
+      stageTransitions.push(`${snapshot.stage}:${snapshot.provider ?? 'none'}`);
+    }
+  }));
+
+  assert.equal(result.outcome, 'completed');
+  assert.equal(result.stage, TURN_STAGES.COMPLETED);
+  assert.equal(result.provider, 'cloud');
+  assert.equal(result.userMessagePersisted, true);
+  assert.equal(result.assistantMessagePersisted, true);
+  assert.equal(result.assistantReply, 'assistant reply');
+  assert.equal(inFlightTurnRef.current, null);
+  assert.deepEqual(callOrder, [
+    'persist_user',
+    'resolve_provider',
+    'init:cloud',
+    'build_context:cloud',
+    'generate:cloud:1',
+    'persist_assistant:cloud:assistant reply',
+    'queue:cloud:assistant reply'
+  ]);
+  assert.ok(stageTransitions.includes('persist_user_message:none'));
+  assert.ok(stageTransitions.includes('resolve_provider:none'));
+  assert.ok(stageTransitions.includes('resolve_provider:cloud'));
+  assert.ok(stageTransitions.includes('queue_post_processing:cloud'));
+  assert.ok(stageTransitions.includes('completed:cloud'));
+});
+
+test('executeAssistantTurn returns failed outcome with stage context and clears in-flight state', async () => {
+  const inFlightTurnRef = { current: null };
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-failure',
+    threadId: 'thread-exec-failure',
+    startedAt: 5678,
+    inFlightTurnRef,
+    persistUserMessage: async () => {},
+    resolveProvider: async () => 'local',
+    initProvider: async () => {},
+    buildMemoryContext: async () => {
+      throw new Error('context exploded');
+    },
+    generateAssistantReply: async () => 'should-not-run',
+    persistAssistantReply: async () => {},
+    queuePostProcessing: async () => {}
+  }));
+
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.stage, TURN_STAGES.BUILD_MEMORY_CONTEXT);
+  assert.equal(result.provider, 'local');
+  assert.equal(result.userMessagePersisted, true);
+  assert.equal(result.assistantMessagePersisted, false);
+  assert.equal(result.assistantReply, undefined);
+  assert.equal(result.error instanceof Error, true);
+  assert.equal(result.error.message, 'context exploded');
+  assert.equal(inFlightTurnRef.current, null);
+});
+
+test('executeAssistantTurn runs stop-recording stage before persisting user message', async () => {
+  const inFlightTurnRef = { current: null };
+  const callOrder = [];
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-recording',
+    threadId: 'thread-exec-recording',
+    startedAt: 9999,
+    inFlightTurnRef,
+    isRecording: true,
+    stopRecording: async () => {
+      callOrder.push('stop_recording');
+    },
+    persistUserMessage: async () => {
+      callOrder.push('persist_user');
+    },
+    resolveProvider: async () => 'local',
+    initProvider: async () => {},
+    buildMemoryContext: async () => ({}),
+    generateAssistantReply: async () => 'ok',
+    persistAssistantReply: async () => {},
+    queuePostProcessing: async () => {}
+  }));
+
+  assert.equal(result.outcome, 'completed');
+  assert.deepEqual(callOrder.slice(0, 2), ['stop_recording', 'persist_user']);
+});
+
+test('executeAssistantTurn fails at stop-recording stage before persisting user message when recorder stop throws', async () => {
+  const inFlightTurnRef = { current: null };
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-stop-failure',
+    threadId: 'thread-exec-stop-failure',
+    startedAt: 10001,
+    inFlightTurnRef,
+    isRecording: true,
+    stopRecording: async () => {
+      throw new Error('mic stop failed');
+    },
+    persistUserMessage: async () => {},
+    resolveProvider: async () => 'local',
+    initProvider: async () => {},
+    buildMemoryContext: async () => ({}),
+    generateAssistantReply: async () => 'ok',
+    persistAssistantReply: async () => {},
+    queuePostProcessing: async () => {}
+  }));
+
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.stage, TURN_STAGES.STOP_RECORDING);
+  assert.equal(result.provider, undefined);
+  assert.equal(result.userMessagePersisted, false);
+  assert.equal(result.assistantMessagePersisted, false);
+  assert.equal(result.error instanceof Error, true);
+  assert.equal(result.error.message, 'mic stop failed');
+  assert.equal(inFlightTurnRef.current, null);
+});
+
+test('executeAssistantTurn fails at queue stage but keeps persisted assistant state for graceful fallback handling', async () => {
+  const inFlightTurnRef = { current: null };
+
+  const result = await withMutedConsole(() => executeAssistantTurn({
+    turnId: 'turn-exec-queue-failure',
+    threadId: 'thread-exec-queue-failure',
+    startedAt: 7777,
+    inFlightTurnRef,
+    persistUserMessage: async () => {},
+    resolveProvider: async () => 'cloud',
+    initProvider: async () => {},
+    buildMemoryContext: async () => ({ compact: true }),
+    generateAssistantReply: async () => 'assistant ok',
+    persistAssistantReply: async () => {},
+    queuePostProcessing: async () => {
+      throw new Error('queue failed');
+    }
+  }));
+
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.stage, TURN_STAGES.QUEUE_POST_PROCESSING);
+  assert.equal(result.provider, 'cloud');
+  assert.equal(result.userMessagePersisted, true);
+  assert.equal(result.assistantMessagePersisted, true);
+  assert.equal(result.assistantReply, 'assistant ok');
+  assert.equal(result.error instanceof Error, true);
+  assert.equal(result.error.message, 'queue failed');
   assert.equal(inFlightTurnRef.current, null);
 });

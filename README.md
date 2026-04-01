@@ -36,7 +36,7 @@ npm run verify:all
 ```
 
 - `typecheck`: TypeScript checks (`tsc --noEmit`)
-- `test`: deterministic hardening tests (memory/retrieval/extraction/turn-pipeline/provider utilities + model lifecycle helpers)
+- `test`: deterministic hardening tests (memory/retrieval/extraction/turn-pipeline/provider/status/settings lifecycle/thread-history/model lifecycle helpers)
 - `verify`: app safety command (`typecheck` + `test`)
 - `setup:proxy`: installs `backend-proxy` dependencies from repo root
 - `setup:all`: convenience alias for repo-wide setup tasks (currently `setup:proxy`)
@@ -55,6 +55,7 @@ Notes:
 - hardening tests keep strict checks and suppress noisy Node warning spam from type-stripping/module-typeless warnings.
 - `verify:all` is the intended lightweight release gate and is what CI runs.
 - proxy smoke coverage includes health/config checks, invalid JSON/request handling, request-id traceability, and privacy-default behavior for both chat and extract routes.
+- UI polish baseline includes reduced-motion-aware transitions and restrained haptic feedback on key confidence actions (send success, reminder state changes, provider retry outcomes).
 - optional debug logging:
   - app: `SECOND_BRAIN_DEBUG_LOGS=1` (or `EXPO_PUBLIC_DEBUG_LOGS=1`)
   - proxy: `OPENAI_PROXY_DEBUG_LOGS=true`
@@ -76,6 +77,20 @@ npm audit --omit=dev
 # proxy
 npm --prefix backend-proxy audit
 npm --prefix backend-proxy audit --omit=dev
+```
+
+Inspect deprecation chains:
+
+```bash
+# root warning chains
+npm ls inflight rimraf glob
+npm explain inflight
+npm explain rimraf
+npm explain glob
+
+# proxy warning chain
+npm --prefix backend-proxy ls node-domexception
+npm --prefix backend-proxy explain node-domexception
 ```
 
 Safe changes in this repo:
@@ -103,13 +118,18 @@ Current triage status (March 31, 2026):
 
 Deprecation warnings still present (tracked, non-audit):
 
-- root install prints `inflight@1.0.6`, `rimraf@3`, and `glob@7` deprecations from transitive Expo/React Native tooling chains
-- proxy install prints `node-domexception@1.0.0` deprecation via `openai -> formdata-node`
+- direct dependencies with deprecation warnings: none (root + proxy)
+- root transitive warnings: `inflight@1.0.6`, `rimraf@3.0.2`, `glob@7.2.3`
+  - chains are from Expo/React Native tooling paths (`expo -> @expo/cli -> @react-native/dev-middleware -> chromium-edge-launcher -> rimraf -> glob -> inflight`, plus `react-native -> @react-native/codegen/test tooling -> glob -> inflight`)
+  - these are mostly build/dev-tooling paths, but appear in normal install output because they are transitively included in production dependency trees
+- proxy transitive warning: `node-domexception@1.0.0` via `openai -> formdata-node`
+  - this is runtime-relevant in the cloud proxy path, but currently has no associated audit advisory and no functional regression in smoke coverage
 
 Planned future path:
 
 - avoid broad `npm audit fix` churn in the current release branch
-- clear deprecation chains as part of the next planned Expo SDK / React Native toolchain upgrade branch
+- clear root deprecation chains as part of the next planned Expo SDK / React Native upgrade branch (where upstream toolchain deps can move off `glob@7`/`rimraf@3` cleanly)
+- re-evaluate proxy `openai` major upgrades in a dedicated cloud-provider hardening window (with smoke + app integration checks) rather than forcing churn only to reduce install warning text
 - re-run `npm audit` + `npm audit --omit=dev` and `npm run verify:all` after each dependency window
 
 Deprecation warning note:

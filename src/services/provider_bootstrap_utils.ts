@@ -20,14 +20,14 @@ const normalizeCount = (value: unknown): number => {
 
 const resolveCloudAvailability = (input: CloudBootstrapInput): boolean => {
     if (typeof input === 'boolean') return input;
-    return Boolean(input.available);
+    return input.available === true;
 };
 
 const resolveLocalAvailability = (input: LocalBootstrapInput): boolean => {
     if (typeof input.localStatusAvailable === 'boolean') {
         return input.localStatusAvailable;
     }
-    return Boolean(input.localAvailable);
+    return input.localAvailable === true;
 };
 
 const resolveUsableInstalledModelCount = (input: LocalBootstrapInput): number => {

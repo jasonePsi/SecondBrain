@@ -17,6 +17,11 @@ test('resolveInitialVisibleCount keeps base page size for invalid offsets', () =
   assert.equal(resolveInitialVisibleCount(50, Number.NaN), 50);
 });
 
+test('resolveInitialVisibleCount normalizes invalid page size and trailing context', () => {
+  assert.equal(resolveInitialVisibleCount(Number.NaN, 4, Number.NaN), 4);
+  assert.equal(resolveInitialVisibleCount(0, 4, -10), 4);
+});
+
 test('resolveInitialVisibleCount expands when target offset is deeper than base page size', () => {
   assert.equal(resolveInitialVisibleCount(50, 80, 8), 88);
   assert.equal(resolveInitialVisibleCount(50, 10, 8), 50);
@@ -27,6 +32,11 @@ test('resolveMutationRefreshVisibleCount keeps loaded history visible after turn
   assert.equal(resolveMutationRefreshVisibleCount(50, 50, 4), 54);
   assert.equal(resolveMutationRefreshVisibleCount(120, 50, 4), 124);
   assert.equal(resolveMutationRefreshVisibleCount(Number.NaN, 50, 4), 50);
+});
+
+test('resolveMutationRefreshVisibleCount normalizes invalid page size and trailing buffer', () => {
+  assert.equal(resolveMutationRefreshVisibleCount(5, Number.NaN, 4), 9);
+  assert.equal(resolveMutationRefreshVisibleCount(5, 0, Number.NaN), 5);
 });
 
 test('buildHistorySnapshotFromNewest sorts newest-query rows chronologically and flags older availability', () => {
@@ -43,6 +53,20 @@ test('buildHistorySnapshotFromNewest sorts newest-query rows chronologically and
   assert.equal(snapshot.loadedMessageCount, 3);
   assert.equal(snapshot.totalMessageCount, 6);
   assert.equal(snapshot.hasOlderMessages, true);
+});
+
+test('buildHistorySnapshotFromNewest normalizes invalid totals to message length floor', () => {
+  const snapshot = buildHistorySnapshotFromNewest(
+    [
+      { id: 'm2', created_at: 2000 },
+      { id: 'm1', created_at: 1000 }
+    ],
+    Number.NaN
+  );
+
+  assert.equal(snapshot.totalMessageCount, 2);
+  assert.equal(snapshot.loadedMessageCount, 2);
+  assert.equal(snapshot.hasOlderMessages, false);
 });
 
 test('mergeOlderHistoryBatch prepends older rows and de-duplicates overlap deterministically', () => {
@@ -63,6 +87,24 @@ test('mergeOlderHistoryBatch prepends older rows and de-duplicates overlap deter
   assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3', 'm4']);
   assert.equal(snapshot.loadedMessageCount, 4);
   assert.equal(snapshot.totalMessageCount, 4);
+  assert.equal(snapshot.hasOlderMessages, false);
+});
+
+test('mergeOlderHistoryBatch normalizes invalid count inputs without producing NaN state', () => {
+  const snapshot = mergeOlderHistoryBatch({
+    existingMessages: [
+      { id: 'm3', created_at: 3000 }
+    ],
+    olderBatch: [
+      { id: 'm1', created_at: 1000 },
+      { id: 'm2', created_at: 2000 }
+    ],
+    loadedMessageCount: Number.NaN,
+    totalMessageCount: Number.NaN
+  });
+
+  assert.equal(snapshot.totalMessageCount, 3);
+  assert.equal(snapshot.loadedMessageCount, 3);
   assert.equal(snapshot.hasOlderMessages, false);
 });
 

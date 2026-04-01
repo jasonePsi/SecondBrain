@@ -145,4 +145,25 @@ test('resolveCloudProviderInitialRoute treats malformed status payload as unavai
     resolveCloudProviderInitialRoute({ available: undefined }),
     '/(tabs)/settings'
   );
+  assert.equal(
+    resolveCloudProviderInitialRoute({ available: 'true' }),
+    '/(tabs)/settings'
+  );
+});
+
+test('resolveLocalProviderInitialRoute treats non-boolean availability flags as unavailable', () => {
+  assert.equal(
+    resolveLocalProviderInitialRoute({
+      localAvailable: 'true',
+      installedModelCount: 2
+    }),
+    '/(tabs)/settings'
+  );
+  assert.equal(
+    resolveLocalProviderInitialRoute({
+      localStatusAvailable: 'true',
+      installedModelCount: 0
+    }),
+    '/onboarding/model-selection'
+  );
 });

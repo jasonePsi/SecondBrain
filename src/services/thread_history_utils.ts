@@ -43,17 +43,27 @@ const dedupeById = <T extends HistoryMessageLike>(messages: T[]): T[] => {
     return deduped;
 };
 
+const normalizePositiveInt = (value: number, fallback = 1): number => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(1, Math.floor(value));
+};
+
+const normalizeNonNegativeInt = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.floor(value));
+};
+
 export const resolveInitialVisibleCount = (
     pageSize: number,
     targetOffset?: number | null,
     trailingContext = 8
 ): number => {
-    const normalizedPageSize = Math.max(1, Math.floor(pageSize));
+    const normalizedPageSize = normalizePositiveInt(pageSize);
     if (typeof targetOffset !== 'number' || !Number.isFinite(targetOffset) || targetOffset < 0) {
         return normalizedPageSize;
     }
 
-    const normalizedTrailingContext = Math.max(0, Math.floor(trailingContext));
+    const normalizedTrailingContext = normalizeNonNegativeInt(trailingContext);
     return Math.max(
         normalizedPageSize,
         Math.floor(targetOffset) + normalizedTrailingContext
@@ -65,11 +75,9 @@ export const resolveMutationRefreshVisibleCount = (
     pageSize: number,
     trailingBuffer = 4
 ): number => {
-    const normalizedPageSize = Math.max(1, Math.floor(pageSize));
-    const normalizedLoadedCount = Number.isFinite(loadedMessageCount)
-        ? Math.max(0, Math.floor(loadedMessageCount))
-        : 0;
-    const normalizedTrailingBuffer = Math.max(0, Math.floor(trailingBuffer));
+    const normalizedPageSize = normalizePositiveInt(pageSize);
+    const normalizedLoadedCount = normalizeNonNegativeInt(loadedMessageCount);
+    const normalizedTrailingBuffer = normalizeNonNegativeInt(trailingBuffer);
     return Math.max(
         normalizedPageSize,
         normalizedLoadedCount + normalizedTrailingBuffer
@@ -138,7 +146,10 @@ export const buildHistorySnapshotFromNewest = <T extends HistoryMessageLike>(
     totalMessageCount: number
 ): ThreadHistorySnapshot<T> => {
     const messages = sortChronological(dedupeById(newestMessages));
-    const normalizedTotal = Math.max(totalMessageCount, messages.length);
+    const normalizedTotal = Math.max(
+        normalizeNonNegativeInt(totalMessageCount),
+        messages.length
+    );
     const loadedMessageCount = messages.length;
     return {
         messages,
@@ -158,10 +169,13 @@ export const mergeOlderHistoryBatch = <T extends HistoryMessageLike>(input: {
     const mergedMessages = sortChronological(
         dedupeById([...chronologicalOlderBatch, ...input.existingMessages])
     );
-    const normalizedTotal = Math.max(input.totalMessageCount, mergedMessages.length);
+    const normalizedTotal = Math.max(
+        normalizeNonNegativeInt(input.totalMessageCount),
+        mergedMessages.length
+    );
     const loadedMessageCount = Math.min(
         normalizedTotal,
-        Math.max(input.loadedMessageCount, mergedMessages.length)
+        Math.max(normalizeNonNegativeInt(input.loadedMessageCount), mergedMessages.length)
     );
 
     return {

@@ -15,10 +15,13 @@
    - stale/missing local model files are not shown as installed.
 2. Install model in onboarding:
    - model downloads, activates, and app opens to Spaces.
+   - download screen shows clear stage/progress with understandable retry/back actions.
 3. Settings:
+   - grouped sections remain legible: active provider, cloud status, local models, fallback, privacy/diagnostics, troubleshooting.
    - install does not auto-switch active model.
    - explicit "Use This Model" changes active model (or "Set as Fallback" when cloud is active).
    - switching provider is blocked when the target provider is unavailable, with an actionable reason.
+   - when local is unavailable due to missing/unspecified active model but another usable local model exists, Settings shows **Fix and Switch to Local** and succeeds without forcing manual re-selection first.
    - rapid provider/model actions (switch + retry + refresh) do not revert to stale status cards/badges.
 4. Delete active model:
    - fallback model becomes active if present, else active model is cleared.
@@ -64,6 +67,7 @@
    - full history can be loaded without silent truncation.
    - while older messages load, status text is visible (not spinner-only).
    - if older-history fetch fails, retry action is visible and works.
+   - rename thread shows a clear saving state and does not double-submit.
 4. Provider/model unavailable:
    - banner copy is actionable.
    - sending is blocked when provider is clearly unavailable.
@@ -111,7 +115,7 @@
 8. Clear query while search is in-flight and confirm stale results do not reappear.
 9. Start a second query quickly after a first one and confirm previous-query results do not remain visible under the new query header.
 10. Re-run the same query using Retry and confirm results refresh once (no duplicate/flicker loop).
-11. While typing a new query, old settled results should not continue showing under the new text.
+11. While typing a new query, old settled results and old error banners should not continue showing under the new text.
 
 ## States and Polish
 
@@ -125,6 +129,19 @@
 3. Confirm onboarding model screens:
    - loading/error states are understandable.
    - model status and battery impact copy are clear.
+   - selected model CTA matches the actual next step ("Use Selected Model" vs "Download & Continue").
 4. For Brain/Feed/Spaces/Space detail partial refresh failures, verify inline warning rows include an explicit “Retry” action.
 5. In thread view, verify conversation history load failures still show a visible retry row even when no messages have loaded yet.
 6. Feed empty state offers a direct path to Spaces ("Go to Spaces").
+7. In Spaces edit mode, rename/delete controls should show in-flight state (saving/spinner) and avoid duplicate actions.
+8. Motion and haptics:
+   - with default settings, button presses and list updates feel subtle (no flashy transitions).
+   - thread jump-from-search shows a short, clear highlight cue.
+   - haptic feedback appears on send success, reminder completion/cancel, and provider retry outcomes.
+9. Reduced Motion:
+   - enable device Reduce Motion and confirm transitions become minimal.
+   - core states remain understandable without animation.
+10. Accessibility:
+   - icon-only buttons have meaningful VoiceOver labels/hints.
+   - primary controls keep comfortable tap targets.
+   - warning/error copy is understandable without relying on color alone.

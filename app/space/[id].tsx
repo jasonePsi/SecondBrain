@@ -1,552 +1,513 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
+import {
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
+} from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
-import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
-import { SpaceRepo } from '../../src/repositories/space_repo';
-import { FeedRepo } from '../../src/repositories/feed_repo';
-import { Colors } from '../../src/constants/Colors';
-import { useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Thread, ThreadRepo } from '../../src/repositories/thread_repo';
+import { FeedRepo } from '../../src/repositories/feed_repo';
+import { SpaceRepo } from '../../src/repositories/space_repo';
+import { useAppTheme } from '../../src/theme/theme';
+import { runLayoutFeedback, triggerHaptic, useReducedMotion } from '../../src/services/interaction_feedback';
+import {
+    AppButton,
+    EmptyStateView,
+    ErrorStateView,
+    GroupedSection,
+    InlineBanner,
+    ListRow,
+    LoadingStateView,
+    ScreenScaffold,
+    SectionHeader
+} from '../../src/components/ui';
 
 export default function SpaceDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
-  const isMountedRef = useRef(true);
-  const loadRequestRef = useRef(0);
-  const [threads, setThreads] = useState<Thread[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [spaceName, setSpaceName] = useState('Space');
-  const [isNewThreadOpen, setIsNewThreadOpen] = useState(false);
-  const [newThreadName, setNewThreadName] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
-  const [renameTarget, setRenameTarget] = useState<Thread | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [creatingThread, setCreatingThread] = useState(false);
-  const [savingRename, setSavingRename] = useState(false);
-  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+    const theme = useAppTheme();
+    const reducedMotion = useReducedMotion();
+    const { id } = useLocalSearchParams<{ id: string }>();
+    const router = useRouter();
+    const isMountedRef = useRef(true);
+    const loadRequestRef = useRef(0);
+    const [threads, setThreads] = useState<Thread[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [spaceName, setSpaceName] = useState('Space');
+    const [isNewThreadOpen, setIsNewThreadOpen] = useState(false);
+    const [newThreadName, setNewThreadName] = useState('');
+    const [isEditing, setIsEditing] = useState(false);
+    const [renameTarget, setRenameTarget] = useState<Thread | null>(null);
+    const [renameValue, setRenameValue] = useState('');
+    const [creatingThread, setCreatingThread] = useState(false);
+    const [savingRename, setSavingRename] = useState(false);
+    const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
 
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
-  const loadData = useCallback(async () => {
-    if (!id) return;
-    const requestId = ++loadRequestRef.current;
-    const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
-    try {
-      if (canApply()) {
-        setLoading(true);
-        setError(null);
-      }
-      const space = await SpaceRepo.get(id);
-      if (!canApply()) return;
-      if (space) setSpaceName(space.name);
-
-      const data = await ThreadRepo.listBySpace(id);
-      if (!canApply()) return;
-      setThreads(data);
-    } catch (err: any) {
-      console.error('Failed to load space detail:', err);
-      if (canApply()) {
-        setError('Threads are temporarily unavailable in this space.');
-      }
-    } finally {
-      if (canApply()) {
-        setLoading(false);
-      }
-    }
-  }, [id]);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [loadData])
-  );
-
-  const openNewThread = () => {
-    if (isEditing) return;
-    setNewThreadName('');
-    setIsNewThreadOpen(true);
-  };
-
-  const closeNewThread = () => {
-    setIsNewThreadOpen(false);
-    setNewThreadName('');
-  };
-
-  const createThread = async () => {
-    if (!id) return;
-    const trimmed = newThreadName.trim();
-    const title = trimmed || 'Untitled Thread';
-    try {
-      setCreatingThread(true);
-      const newId = await ThreadRepo.create(id, title);
-      await FeedRepo.create(id, 'thread_created', newId);
-      closeNewThread();
-      await loadData();
-      router.push(`/thread/${newId}`);
-    } catch (error) {
-      console.error('Create thread failed:', error);
-      Alert.alert('Could Not Create Thread', 'Please try again.');
-    } finally {
-      setCreatingThread(false);
-    }
-  };
-
-  const toggleEdit = () => {
-    setIsEditing((prev) => !prev);
-    setRenameTarget(null);
-  };
-
-  const openRename = (thread: Thread) => {
-    setRenameTarget(thread);
-    setRenameValue(thread.title);
-  };
-
-  const closeRename = () => {
-    setRenameTarget(null);
-    setRenameValue('');
-  };
-
-  const saveRename = async () => {
-    if (!renameTarget) return;
-    const trimmed = renameValue.trim();
-    if (!trimmed) return;
-
-    try {
-      setSavingRename(true);
-      await ThreadRepo.update(renameTarget.id, { title: trimmed });
-      await FeedRepo.create(id || null, 'thread_updated', renameTarget.id);
-      closeRename();
-      await loadData();
-    } catch (error) {
-      console.error('Rename failed:', error);
-      Alert.alert('Error', 'Could not rename thread.');
-    } finally {
-      setSavingRename(false);
-    }
-  };
-
-  const handleDelete = (thread: Thread) => {
-    Alert.alert(
-      'Delete Thread',
-      `Delete "${thread.title}"? This will remove all messages in it.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setDeletingThreadId(thread.id);
-              await ThreadRepo.delete(thread.id);
-              await loadData();
-            } catch (error) {
-              console.error('Delete failed:', error);
-              Alert.alert('Error', 'Could not delete thread.');
-            } finally {
-              setDeletingThreadId(null);
+    const loadData = useCallback(async () => {
+        if (!id) return;
+        const requestId = ++loadRequestRef.current;
+        const canApply = () => isMountedRef.current && requestId === loadRequestRef.current;
+        try {
+            if (canApply()) {
+                setLoading(true);
+                setError(null);
             }
-          }
+            const space = await SpaceRepo.get(id);
+            if (!canApply()) return;
+            if (space) setSpaceName(space.name);
+
+            const data = await ThreadRepo.listBySpace(id);
+            if (!canApply()) return;
+            runLayoutFeedback(reducedMotion);
+            setThreads(data);
+        } catch (err: any) {
+            console.error('Failed to load space detail:', err);
+            if (canApply()) {
+                setError('Threads are temporarily unavailable in this space.');
+            }
+        } finally {
+            if (canApply()) {
+                setLoading(false);
+            }
         }
-      ]
+    }, [id, reducedMotion]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadData();
+        }, [loadData])
     );
-  };
 
-  const renderItem = ({ item }: { item: Thread }) => (
-    <View style={styles.item}>
-      <TouchableOpacity
-        style={styles.itemContent}
-        onPress={() => router.push(`/thread/${item.id}`)}
-        disabled={isEditing}
-      >
-        <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.itemDate}>{new Date(item.created_at).toLocaleString()}</Text>
-      </TouchableOpacity>
+    const openNewThread = () => {
+        if (isEditing) return;
+        setNewThreadName('');
+        setIsNewThreadOpen(true);
+    };
 
-      {isEditing && (
-        <View style={styles.itemActions}>
-          <TouchableOpacity
-            style={[styles.actionButton, deletingThreadId === item.id && styles.actionDisabled]}
-            onPress={() => openRename(item)}
-            disabled={deletingThreadId === item.id}
-          >
-            <Ionicons
-              name="pencil"
-              size={18}
-              color={deletingThreadId === item.id ? Colors.secondaryText : Colors.primary}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, deletingThreadId === item.id && styles.actionDisabled]}
-            onPress={() => handleDelete(item)}
-            disabled={deletingThreadId === item.id}
-          >
-            {deletingThreadId === item.id ? (
-              <ActivityIndicator size="small" color={Colors.notification} />
-            ) : (
-              <Ionicons name="trash" size={18} color={Colors.notification} />
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
-  );
+    const closeNewThread = () => {
+        setIsNewThreadOpen(false);
+        setNewThreadName('');
+    };
 
-  if (error && !loading && threads.length === 0) {
-    return (
-      <View style={styles.container}>
-        <Stack.Screen options={{ title: spaceName }} />
-        <View style={styles.fullState}>
-          <Text style={styles.errorStateText}>Threads are temporarily unavailable.</Text>
-          <Text style={styles.errorStateSubtext}>Try again, or return to Spaces.</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={loadData}>
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.retryButton, styles.secondaryButton]}
-            onPress={() => router.replace('/(tabs)/spaces')}
-          >
-            <Text style={[styles.retryButtonText, styles.secondaryButtonText]}>Go to Spaces</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
+    const createThread = async () => {
+        if (!id) return;
+        const trimmed = newThreadName.trim();
+        const title = trimmed || 'Untitled Thread';
+        try {
+            setCreatingThread(true);
+            const newId = await ThreadRepo.create(id, title);
+            await FeedRepo.create(id, 'thread_created', newId);
+            closeNewThread();
+            await loadData();
+            triggerHaptic('success', reducedMotion);
+            router.push(`/thread/${newId}`);
+        } catch (createError) {
+            console.error('Create thread failed:', createError);
+            Alert.alert('Could Not Create Thread', 'Please try again.');
+            triggerHaptic('error', reducedMotion);
+        } finally {
+            setCreatingThread(false);
+        }
+    };
 
-  return (
-    <View style={styles.container}>
-      <Stack.Screen
-        options={{
-          title: spaceName,
-          headerRight: () => (
-            <View style={styles.headerActions}>
-              {!isEditing && (
-                <TouchableOpacity onPress={openNewThread} style={styles.headerButton}>
-                  <Ionicons name="add-circle" size={26} color={Colors.primary} />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity onPress={toggleEdit} style={styles.headerButton}>
-                <Ionicons
-                  name={isEditing ? 'checkmark-circle' : 'ellipsis-horizontal-circle'}
-                  size={26}
-                  color={Colors.primary}
+    const toggleEdit = () => {
+        setIsEditing((prev) => !prev);
+        setRenameTarget(null);
+    };
+
+    const openRename = (thread: Thread) => {
+        setRenameTarget(thread);
+        setRenameValue(thread.title);
+    };
+
+    const closeRename = () => {
+        if (savingRename) return;
+        setRenameTarget(null);
+        setRenameValue('');
+    };
+
+    const saveRename = async () => {
+        if (!renameTarget) return;
+        const trimmed = renameValue.trim();
+        if (!trimmed) return;
+
+        try {
+            setSavingRename(true);
+            await ThreadRepo.update(renameTarget.id, { title: trimmed });
+            await FeedRepo.create(id || null, 'thread_updated', renameTarget.id);
+            closeRename();
+            await loadData();
+            triggerHaptic('success', reducedMotion);
+        } catch (renameError) {
+            console.error('Rename failed:', renameError);
+            Alert.alert('Error', 'Could not rename thread.');
+            triggerHaptic('error', reducedMotion);
+        } finally {
+            setSavingRename(false);
+        }
+    };
+
+    const handleDelete = (thread: Thread) => {
+        Alert.alert(
+            'Delete Thread',
+            `Delete "${thread.title}"? This will remove all messages in it.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            triggerHaptic('warning', reducedMotion);
+                            setDeletingThreadId(thread.id);
+                            await ThreadRepo.delete(thread.id);
+                            await loadData();
+                            triggerHaptic('success', reducedMotion);
+                        } catch (deleteError) {
+                            console.error('Delete failed:', deleteError);
+                            Alert.alert('Error', 'Could not delete thread.');
+                            triggerHaptic('error', reducedMotion);
+                        } finally {
+                            setDeletingThreadId(null);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const renderRowActions = (thread: Thread) => {
+        if (!isEditing) return null;
+        const deleting = deletingThreadId === thread.id;
+
+        return (
+            <View
+                style={[
+                    styles.rowActions,
+                    {
+                        borderTopColor: theme.colors.separator.subtle,
+                        backgroundColor: theme.colors.background.grouped
+                    }
+                ]}
+            >
+                <AppButton
+                    size="sm"
+                    variant="secondary"
+                    label="Rename"
+                    onPress={() => openRename(thread)}
+                    disabled={deleting}
                 />
-              </TouchableOpacity>
+                <AppButton
+                    size="sm"
+                    variant="destructive"
+                    label={deleting ? 'Deleting…' : 'Delete'}
+                    onPress={() => handleDelete(thread)}
+                    disabled={deleting}
+                    loading={deleting}
+                />
             </View>
-          )
-        }}
-      />
-      <FlashList
-        data={threads}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        ListEmptyComponent={(
-          loading ? (
-            <View style={styles.centerState}>
-              <ActivityIndicator size="small" color={Colors.primary} />
-              <Text style={styles.empty}>Loading threads…</Text>
-            </View>
-          ) : (
-            <View style={styles.centerState}>
-              <Text style={styles.empty}>No threads yet. Create your first thread to start chatting.</Text>
-              <TouchableOpacity style={styles.emptyActionButton} onPress={openNewThread}>
-                <Text style={styles.emptyActionText}>Create Thread</Text>
-              </TouchableOpacity>
-            </View>
-          )
-        )}
-        ListHeaderComponent={(
-          <View>
-            {!!error && (
-              <View style={styles.inlineWarningRow}>
-                <Text style={styles.inlineError}>Refresh issue: {error}</Text>
-                <TouchableOpacity onPress={loadData}>
-                  <Text style={styles.inlineWarningAction}>Retry</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {loading && threads.length > 0 && (
-              <Text style={styles.inlineHint}>Refreshing threads…</Text>
-            )}
-            {isEditing && (
-              <Text style={styles.inlineHint}>Editing enabled: rename or delete threads. Tap ✓ when done.</Text>
-            )}
-          </View>
-        )}
-      />
+        );
+    };
 
-      <Modal
-        transparent
-        visible={isNewThreadOpen}
-        animationType="fade"
-        onRequestClose={closeNewThread}
-      >
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>New Thread</Text>
-              <Text style={styles.modalSubtitle}>Give it a name now, or rename it later.</Text>
-              <TextInput
-                style={styles.modalInput}
-                value={newThreadName}
-                onChangeText={setNewThreadName}
-                placeholder="Thread name (optional)"
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={createThread}
-              />
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.modalButton} onPress={closeNewThread}>
-                  <Text style={styles.modalButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.modalPrimaryButton, creatingThread && styles.modalPrimaryButtonDisabled]}
-                  onPress={createThread}
-                  disabled={creatingThread}
-                >
-                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>
-                    {creatingThread ? 'Creating…' : 'Create'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+    const renderItem = ({ item }: { item: Thread }) => (
+        <GroupedSection style={styles.threadCard}>
+            <ListRow
+                title={item.title}
+                subtitle={new Date(item.created_at).toLocaleString()}
+                onPress={() => router.push(`/thread/${item.id}`)}
+                disabled={isEditing}
+                trailing={(
+                    <Ionicons
+                        name="chevron-forward"
+                        size={16}
+                        color={theme.colors.text.tertiary}
+                    />
+                )}
+            />
+            {renderRowActions(item)}
+        </GroupedSection>
+    );
 
-      <Modal
-        transparent
-        visible={!!renameTarget}
-        animationType="fade"
-        onRequestClose={closeRename}
-      >
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Rename Thread</Text>
-              <Text style={styles.modalSubtitle}>Use a clear title so this thread is easy to find.</Text>
-              <TextInput
-                style={styles.modalInput}
-                value={renameValue}
-                onChangeText={setRenameValue}
-                placeholder="Thread name"
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={saveRename}
-              />
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.modalButton} onPress={closeRename}>
-                  <Text style={styles.modalButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.modalPrimaryButton, (!renameValue.trim() || savingRename) && styles.modalPrimaryButtonDisabled]}
-                  onPress={saveRename}
-                  disabled={!renameValue.trim() || savingRename}
-                >
-                  <Text style={[styles.modalButtonText, styles.modalPrimaryText]}>
-                    {savingRename ? 'Saving…' : 'Save'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
-    </View>
-  );
+    if (error && !loading && threads.length === 0) {
+        return (
+            <ScreenScaffold>
+                <Stack.Screen options={{ title: spaceName }} />
+                <ErrorStateView
+                    title="Threads unavailable"
+                    message="Try again, or return to Spaces."
+                    primaryActionLabel="Retry"
+                    onPrimaryAction={loadData}
+                    secondaryActionLabel="Go to Spaces"
+                    onSecondaryAction={() => router.replace('/(tabs)/spaces')}
+                />
+            </ScreenScaffold>
+        );
+    }
+
+    return (
+        <ScreenScaffold>
+            <Stack.Screen
+                options={{
+                    title: spaceName,
+                    headerRight: () => (
+                        <View style={styles.headerActions}>
+                            {!isEditing && (
+                                <TouchableOpacity
+                                    onPress={openNewThread}
+                                    style={styles.headerButton}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Create thread"
+                                    accessibilityHint="Opens the new thread sheet"
+                                >
+                                    <Ionicons name="add-circle" size={24} color={theme.colors.tint.primary} />
+                                </TouchableOpacity>
+                            )}
+                            <TouchableOpacity
+                                onPress={toggleEdit}
+                                style={styles.headerButton}
+                                accessibilityRole="button"
+                                accessibilityLabel={isEditing ? 'Done editing threads' : 'Edit threads'}
+                                accessibilityHint={isEditing ? 'Stops editing mode' : 'Shows rename and delete controls'}
+                            >
+                                <Ionicons
+                                    name={isEditing ? 'checkmark-circle' : 'ellipsis-horizontal-circle'}
+                                    size={24}
+                                    color={theme.colors.tint.primary}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                    )
+                }}
+            />
+            <FlashList
+                data={threads}
+                renderItem={renderItem}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.listContent}
+                ListHeaderComponent={(
+                    <View style={styles.headerBlock}>
+                        <SectionHeader
+                            title="Threads"
+                            subtitle={isEditing ? 'Rename or delete threads.' : 'Continue a conversation or start a new one.'}
+                            trailing={(
+                                <AppButton
+                                    size="sm"
+                                    label="New Thread"
+                                    onPress={openNewThread}
+                                    disabled={isEditing}
+                                />
+                            )}
+                        />
+                        {!!error && (
+                            <InlineBanner
+                                tone="warning"
+                                message={error}
+                                actionLabel="Retry"
+                                onActionPress={loadData}
+                            />
+                        )}
+                        {loading && threads.length > 0 && (
+                            <InlineBanner tone="info" message="Refreshing threads…" />
+                        )}
+                    </View>
+                )}
+                ListEmptyComponent={(
+                    loading ? (
+                        <LoadingStateView
+                            title="Loading threads"
+                            message="Gathering conversations in this space."
+                        />
+                    ) : (
+                        <EmptyStateView
+                            title="No threads yet"
+                            message="Create your first thread to start chatting."
+                            primaryActionLabel="Create Thread"
+                            onPrimaryAction={openNewThread}
+                        />
+                    )
+                )}
+            />
+
+            <Modal
+                transparent
+                visible={isNewThreadOpen}
+                animationType={reducedMotion ? 'none' : 'fade'}
+                onRequestClose={closeNewThread}
+            >
+                <View style={[styles.modalOverlay, { backgroundColor: theme.colors.overlay.scrim }]}>
+                    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                        <View
+                            style={[
+                                styles.modalCard,
+                                {
+                                    backgroundColor: theme.colors.background.surface,
+                                    borderColor: theme.colors.separator.subtle
+                                }
+                            ]}
+                        >
+                            <Text style={[styles.modalTitle, { color: theme.colors.text.primary }]}>New Thread</Text>
+                            <Text style={[styles.modalSubtitle, { color: theme.colors.text.secondary }]}>
+                                Give it a name now, or rename it later.
+                            </Text>
+                            <TextInput
+                                style={[
+                                    styles.modalInput,
+                                    {
+                                        borderColor: theme.colors.separator.subtle,
+                                        color: theme.colors.text.primary,
+                                        backgroundColor: theme.colors.background.base
+                                    }
+                                ]}
+                                value={newThreadName}
+                                onChangeText={setNewThreadName}
+                                placeholder="Thread name (optional)"
+                                placeholderTextColor={theme.colors.text.tertiary}
+                                autoFocus
+                                returnKeyType="done"
+                                onSubmitEditing={createThread}
+                            />
+                            <View style={styles.modalActions}>
+                                <AppButton label="Cancel" variant="secondary" onPress={closeNewThread} />
+                                <AppButton
+                                    label={creatingThread ? 'Creating…' : 'Create'}
+                                    onPress={createThread}
+                                    loading={creatingThread}
+                                />
+                            </View>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
+
+            <Modal
+                transparent
+                visible={!!renameTarget}
+                animationType={reducedMotion ? 'none' : 'fade'}
+                onRequestClose={closeRename}
+            >
+                <View style={[styles.modalOverlay, { backgroundColor: theme.colors.overlay.scrim }]}>
+                    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                        <View
+                            style={[
+                                styles.modalCard,
+                                {
+                                    backgroundColor: theme.colors.background.surface,
+                                    borderColor: theme.colors.separator.subtle
+                                }
+                            ]}
+                        >
+                            <Text style={[styles.modalTitle, { color: theme.colors.text.primary }]}>Rename Thread</Text>
+                            <Text style={[styles.modalSubtitle, { color: theme.colors.text.secondary }]}>
+                                Use a clear title so this thread is easy to find.
+                            </Text>
+                            <TextInput
+                                style={[
+                                    styles.modalInput,
+                                    {
+                                        borderColor: theme.colors.separator.subtle,
+                                        color: theme.colors.text.primary,
+                                        backgroundColor: theme.colors.background.base
+                                    }
+                                ]}
+                                value={renameValue}
+                                onChangeText={setRenameValue}
+                                placeholder="Thread name"
+                                placeholderTextColor={theme.colors.text.tertiary}
+                                autoFocus
+                                returnKeyType="done"
+                                onSubmitEditing={saveRename}
+                            />
+                            <View style={styles.modalActions}>
+                                <AppButton label="Cancel" variant="secondary" onPress={closeRename} />
+                                <AppButton
+                                    label={savingRename ? 'Saving…' : 'Save'}
+                                    onPress={saveRename}
+                                    disabled={!renameValue.trim() || savingRename}
+                                    loading={savingRename}
+                                />
+                            </View>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
+        </ScreenScaffold>
+    );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  item: {
-    padding: 16,
-    backgroundColor: Colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  itemContent: {
-    flex: 1,
-    paddingRight: 10
-  },
-  itemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  itemDate: {
-    color: Colors.secondaryText,
-    fontSize: 12,
-    marginTop: 4
-  },
-  empty: {
-    textAlign: 'center',
-    marginTop: 20,
-    color: Colors.secondaryText
-  },
-  centerState: {
-    marginTop: 40,
-    alignItems: 'center'
-  },
-  emptyActionButton: {
-    marginTop: 12,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8
-  },
-  emptyActionText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600'
-  },
-  fullState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24
-  },
-  inlineError: {
-    flex: 1,
-    color: Colors.notification,
-    fontSize: 12,
-    marginTop: 8
-  },
-  inlineWarningRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 4
-  },
-  inlineWarningAction: {
-    color: Colors.primary,
-    fontSize: 12,
-    fontWeight: '600'
-  },
-  inlineHint: {
-    color: Colors.secondaryText,
-    fontSize: 12,
-    marginHorizontal: 16,
-    marginTop: 2,
-    marginBottom: 4
-  },
-  errorStateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.text
-  },
-  errorStateSubtext: {
-    marginTop: 8,
-    fontSize: 13,
-    color: Colors.secondaryText,
-    textAlign: 'center',
-    paddingHorizontal: 24
-  },
-  retryButton: {
-    marginTop: 14,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontWeight: '600'
-  },
-  secondaryButton: {
-    marginTop: 8,
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border
-  },
-  secondaryButtonText: {
-    color: Colors.primary
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 6
-  },
-  headerButton: {
-    marginLeft: 10
-  },
-  itemActions: {
-    flexDirection: 'row',
-    alignItems: 'center'
-  },
-  actionButton: {
-    paddingHorizontal: 6,
-    paddingVertical: 6
-  },
-  actionDisabled: {
-    opacity: 0.5
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24
-  },
-  modalCard: {
-    width: '100%',
-    backgroundColor: Colors.card,
-    borderRadius: 12,
-    padding: 16
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-    color: Colors.text
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    color: Colors.secondaryText,
-    marginBottom: 10
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: Colors.background,
-    marginBottom: 16
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12
-  },
-  modalButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12
-  },
-  modalButtonText: {
-    fontSize: 15,
-    color: Colors.text
-  },
-  modalPrimaryButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: 8
-  },
-  modalPrimaryButtonDisabled: {
-    opacity: 0.55
-  },
-  modalPrimaryText: {
-    color: 'white',
-    fontWeight: '600'
-  }
+    headerActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 6
+    },
+    headerButton: {
+        marginLeft: 10
+    },
+    listContent: {
+        paddingHorizontal: 14,
+        paddingTop: 10,
+        paddingBottom: 24
+    },
+    headerBlock: {
+        marginBottom: 12,
+        gap: 8
+    },
+    threadCard: {
+        marginBottom: 10
+    },
+    rowActions: {
+        borderTopWidth: StyleSheet.hairlineWidth,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        gap: 8
+    },
+    modalOverlay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24
+    },
+    modalCard: {
+        width: '100%',
+        borderRadius: 14,
+        borderWidth: 1,
+        padding: 16
+    },
+    modalTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+        marginBottom: 4
+    },
+    modalSubtitle: {
+        fontSize: 13,
+        marginBottom: 10
+    },
+    modalInput: {
+        borderWidth: 1,
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 16,
+        marginBottom: 14
+    },
+    modalActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8
+    }
 });

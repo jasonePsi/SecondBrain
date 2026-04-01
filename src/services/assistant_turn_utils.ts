@@ -82,6 +82,10 @@ interface InFlightTurnControllerInput {
     startedAt: number;
     provider?: AIProviderType;
     initialStage?: TurnStage;
+    onStateChange?: (snapshot: {
+        stage: TurnStage;
+        provider?: AIProviderType;
+    }) => void;
 }
 
 export interface InFlightTurnController {
@@ -94,6 +98,50 @@ export interface InFlightTurnController {
     advance: (next: TurnStage, detail?: string) => TurnStage;
     clearIfCurrent: () => void;
     snapshot: () => InFlightTurnState;
+}
+
+interface ExecuteAssistantTurnInput<TMemoryContext = unknown> {
+    turnId: string;
+    threadId: string;
+    startedAt: number;
+    inFlightTurnRef: {
+        current: InFlightTurnState | null;
+    };
+    initialProvider?: AIProviderType;
+    isRecording?: boolean;
+    stopRecording?: () => Promise<void>;
+    persistUserMessage: () => Promise<void>;
+    resolveProvider: () => Promise<AIProviderType>;
+    initProvider: (provider: AIProviderType) => Promise<void>;
+    buildMemoryContext: (provider: AIProviderType) => Promise<TMemoryContext>;
+    generateAssistantReply: (
+        provider: AIProviderType,
+        memoryContext: TMemoryContext
+    ) => Promise<string>;
+    persistAssistantReply: (
+        assistantReply: string,
+        provider: AIProviderType
+    ) => Promise<void>;
+    queuePostProcessing: (params: {
+        provider: AIProviderType;
+        memoryContext: TMemoryContext;
+        assistantReply: string;
+    }) => Promise<void> | void;
+    onStateChange?: (snapshot: {
+        stage: TurnStage;
+        provider?: AIProviderType;
+    }) => void;
+}
+
+export interface ExecuteAssistantTurnResult<TMemoryContext = unknown> {
+    outcome: 'completed' | 'failed';
+    stage: TurnStage;
+    provider?: AIProviderType;
+    userMessagePersisted: boolean;
+    assistantMessagePersisted: boolean;
+    memoryContext?: TMemoryContext;
+    assistantReply?: string;
+    error?: unknown;
 }
 
 const TURN_ALLOWED_TRANSITIONS: Record<TurnStage, ReadonlyArray<TurnStage>> = {
@@ -305,6 +353,10 @@ export const createInFlightTurnController = (
         initialStage,
         onStateChange: ({ stage, provider }) => {
             writeInFlightState(stage, provider);
+            input.onStateChange?.({
+                stage,
+                provider
+            });
         }
     });
 
@@ -334,6 +386,101 @@ export const createInFlightTurnController = (
             startedAt: input.startedAt
         })
     };
+};
+
+const toStageDetail = (error: unknown): string | undefined => {
+    if (error instanceof Error && error.message.trim().length > 0) {
+        return error.message.trim();
+    }
+    if (typeof error === 'string' && error.trim().length > 0) {
+        return error.trim();
+    }
+    return undefined;
+};
+
+export const executeAssistantTurn = async <TMemoryContext = unknown>(
+    input: ExecuteAssistantTurnInput<TMemoryContext>
+): Promise<ExecuteAssistantTurnResult<TMemoryContext>> => {
+    let activeProvider = input.initialProvider;
+    let userMessagePersisted = false;
+    let assistantMessagePersisted = false;
+    let memoryContext: TMemoryContext | undefined;
+    let assistantReply: string | undefined;
+
+    const turnController = createInFlightTurnController({
+        inFlightTurnRef: input.inFlightTurnRef,
+        turnId: input.turnId,
+        threadId: input.threadId,
+        startedAt: input.startedAt,
+        provider: activeProvider,
+        initialStage: TURN_STAGES.START,
+        onStateChange: input.onStateChange
+    });
+
+    const advanceStage = (next: TurnStage, detail?: string): TurnStage => {
+        return turnController.advance(next, detail);
+    };
+
+    try {
+        if (input.isRecording && input.stopRecording) {
+            advanceStage(TURN_STAGES.STOP_RECORDING);
+            await input.stopRecording();
+        }
+
+        advanceStage(TURN_STAGES.PERSIST_USER_MESSAGE);
+        await input.persistUserMessage();
+        userMessagePersisted = true;
+
+        advanceStage(TURN_STAGES.RESOLVE_PROVIDER);
+        activeProvider = await input.resolveProvider();
+        turnController.setProvider(activeProvider);
+
+        advanceStage(TURN_STAGES.INIT_PROVIDER);
+        await input.initProvider(activeProvider);
+
+        advanceStage(TURN_STAGES.BUILD_MEMORY_CONTEXT);
+        memoryContext = await input.buildMemoryContext(activeProvider);
+
+        advanceStage(TURN_STAGES.GENERATE_ASSISTANT_REPLY);
+        assistantReply = await input.generateAssistantReply(activeProvider, memoryContext);
+
+        advanceStage(TURN_STAGES.PERSIST_ASSISTANT_REPLY);
+        await input.persistAssistantReply(assistantReply, activeProvider);
+        assistantMessagePersisted = true;
+
+        advanceStage(TURN_STAGES.QUEUE_POST_PROCESSING);
+        await input.queuePostProcessing({
+            provider: activeProvider,
+            memoryContext,
+            assistantReply
+        });
+
+        const completedStage = advanceStage(TURN_STAGES.COMPLETED);
+        return {
+            outcome: 'completed',
+            stage: completedStage,
+            provider: activeProvider,
+            userMessagePersisted,
+            assistantMessagePersisted,
+            memoryContext,
+            assistantReply
+        };
+    } catch (error) {
+        const failedAtStage = turnController.getStage();
+        advanceStage(TURN_STAGES.FAILED, toStageDetail(error));
+        return {
+            outcome: 'failed',
+            stage: failedAtStage,
+            provider: activeProvider,
+            userMessagePersisted,
+            assistantMessagePersisted,
+            memoryContext,
+            assistantReply,
+            error
+        };
+    } finally {
+        turnController.clearIfCurrent();
+    }
 };
 
 export const shouldBlockSendForThread = (

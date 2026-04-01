@@ -1,15 +1,24 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
-import { useRouter, Stack } from 'expo-router';
-import { SpaceRepo } from '../../src/repositories/space_repo';
+import {
+    KeyboardAvoidingView,
+    Platform,
+    StyleSheet,
+    Text,
+    TextInput,
+    View
+} from 'react-native';
+import { Stack, useRouter } from 'expo-router';
 import { FeedRepo } from '../../src/repositories/feed_repo';
-import { Colors } from '../../src/constants/Colors';
+import { SpaceRepo } from '../../src/repositories/space_repo';
+import { useAppTheme } from '../../src/theme/theme';
+import { AppButton, InlineBanner, ScreenScaffold, SectionHeader } from '../../src/components/ui';
 
 export default function NewSpaceScreen() {
+    const theme = useAppTheme();
     const [name, setName] = useState('');
-    const router = useRouter();
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const router = useRouter();
 
     const handleCreate = async () => {
         if (!name.trim()) return;
@@ -19,8 +28,8 @@ export default function NewSpaceScreen() {
             const id = await SpaceRepo.create(name.trim());
             await FeedRepo.create(id, 'space_created', id);
             router.replace(`/space/${id}`);
-        } catch (e) {
-            console.error(e);
+        } catch (createError) {
+            console.error(createError);
             setError('Could not create this space. Please try again.');
         } finally {
             setIsSubmitting(false);
@@ -28,84 +37,89 @@ export default function NewSpaceScreen() {
     };
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+        <ScreenScaffold edges={['left', 'right', 'bottom']}>
             <Stack.Screen options={{ title: 'New Space', presentation: 'modal' }} />
-
-            <View style={styles.content}>
-                <Text style={styles.label}>Space Name</Text>
-                <TextInput
-                    style={styles.input}
-                    value={name}
-                    onChangeText={setName}
-                    placeholder="e.g., Work, Personal, Project X"
-                    autoFocus
-                    returnKeyType="done"
-                    onSubmitEditing={handleCreate}
+            <KeyboardAvoidingView
+                style={styles.container}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
+                <SectionHeader
+                    title="Create Space"
+                    subtitle="Name a workspace for a domain of conversations."
                 />
-                <Text style={styles.helperText}>You can rename this later.</Text>
-                {!!error && <Text style={styles.errorText}>{error}</Text>}
 
-                <TouchableOpacity
-                    style={[styles.button, (!name.trim() || isSubmitting) && styles.buttonDisabled]}
+                <View
+                    style={[
+                        styles.formCard,
+                        {
+                            backgroundColor: theme.colors.background.surface,
+                            borderColor: theme.colors.separator.subtle
+                        }
+                    ]}
+                >
+                    <Text style={[styles.label, { color: theme.colors.text.secondary }]}>Space Name</Text>
+                    <TextInput
+                        style={[
+                            styles.input,
+                            {
+                                backgroundColor: theme.colors.background.base,
+                                borderColor: theme.colors.separator.subtle,
+                                color: theme.colors.text.primary
+                            }
+                        ]}
+                        value={name}
+                        onChangeText={setName}
+                        placeholder="e.g. Work, Personal, Project X"
+                        placeholderTextColor={theme.colors.text.tertiary}
+                        autoFocus
+                        returnKeyType="done"
+                        onSubmitEditing={handleCreate}
+                    />
+                    <Text style={[styles.helperText, { color: theme.colors.text.tertiary }]}>
+                        You can rename this later.
+                    </Text>
+                    {!!error && (
+                        <InlineBanner tone="error" message={error} />
+                    )}
+                </View>
+
+                <AppButton
+                    label={isSubmitting ? 'Creating space…' : 'Create Space'}
                     onPress={handleCreate}
                     disabled={!name.trim() || isSubmitting}
-                >
-                    <Text style={styles.buttonText}>{isSubmitting ? 'Creating space…' : 'Create Space'}</Text>
-                </TouchableOpacity>
-            </View>
-        </KeyboardAvoidingView>
+                    loading={isSubmitting}
+                />
+            </KeyboardAvoidingView>
+        </ScreenScaffold>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Colors.background,
+        paddingHorizontal: 16,
+        paddingTop: 16
     },
-    content: {
-        padding: 20,
+    formCard: {
+        borderWidth: 1,
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 18
     },
     label: {
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: '600',
-        marginBottom: 8,
-        color: Colors.text
+        marginBottom: 8
     },
     input: {
-        backgroundColor: Colors.card,
-        padding: 16,
-        borderRadius: 12,
-        fontSize: 18,
         borderWidth: 1,
-        borderColor: Colors.border,
-        marginBottom: 24
-    },
-    button: {
-        backgroundColor: Colors.primary,
-        padding: 16,
         borderRadius: 12,
-        alignItems: 'center',
-    },
-    buttonDisabled: {
-        opacity: 0.5
-    },
-    buttonText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '600'
-    },
-    errorText: {
-        marginBottom: 12,
-        color: Colors.notification,
-        fontSize: 13
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        fontSize: 17
     },
     helperText: {
-        marginTop: -16,
-        marginBottom: 14,
-        fontSize: 12,
-        color: Colors.secondaryText
+        marginTop: 8,
+        fontSize: 12
     }
 });

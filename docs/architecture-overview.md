@@ -80,6 +80,7 @@ Provider activation is availability-gated: unavailable providers are not persist
 App-side success-path diagnostics are debug-gated (`__DEV__`, `SECOND_BRAIN_DEBUG_LOGS=1`, or `EXPO_PUBLIC_DEBUG_LOGS=1`) so production logs stay focused on warnings/errors.
 The shared app logger helper lives in `src/services/runtime_log.ts`.
 Settings badge/switch/error copy and fallback warnings are derived via `src/services/settings_lifecycle_utils.ts` and `src/services/provider_status_copy_utils.ts` to keep provider lifecycle messaging deterministic.
+When local is unavailable due to missing/unspecified active model and usable local installs exist, Settings can auto-repair by selecting a deterministic local fallback before completing the provider switch.
 
 Cloud provider error handling normalizes proxy failures into stable, user-safe messages.
 

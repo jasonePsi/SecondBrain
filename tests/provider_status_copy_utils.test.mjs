@@ -61,6 +61,16 @@ test('toUserFacingProviderMessage strips diagnostics and keeps actionable cloud 
   );
 });
 
+test('toUserFacingProviderMessage maps known local detail code copy', () => {
+  const message = toUserFacingProviderMessage(
+    '[LOCAL_MODEL_NOT_SELECTED] No active local model is selected. Choose one in Settings. (trace local-req-1)'
+  );
+  assert.equal(
+    message,
+    'No active local model is selected. Choose one in Settings.'
+  );
+});
+
 test('toUserFacingProviderMessage maps timeout noise to stable copy', () => {
   const message = toUserFacingProviderMessage(
     'Cloud request failed: timed out after 20000ms (request turn-7)'
@@ -111,5 +121,21 @@ test('formatProviderStatusReason uses stable unavailable fallback when detail co
     available: false,
     configured: true
   });
-  assert.equal(message, 'Provider is currently unavailable.');
+  assert.equal(
+    message,
+    'Cloud provider is currently unavailable. Verify proxy setup and retry.'
+  );
+});
+
+test('formatProviderStatusReason uses provider-specific fallback for local unavailability', () => {
+  const message = formatProviderStatusReason({
+    provider: 'local',
+    label: 'Local',
+    available: false,
+    configured: true
+  });
+  assert.equal(
+    message,
+    'Local provider is currently unavailable. Check active model setup and retry.'
+  );
 });
